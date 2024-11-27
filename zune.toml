@@ -1,0 +1,18 @@
+[runtime.debug]
+detailedError = true
+
+[resolvers.formatter]
+maxDepth = 4
+useColor = true
+showTableAddress = true
+showRecursiveTable = false
+displayBufferContentsMax = 48
+
+[compiling]
+debugLevel = 1
+optimizationLevel = 2
+nativeCodeGen = true
+
+[experimental]
+ffi = false
+sqlite = false
