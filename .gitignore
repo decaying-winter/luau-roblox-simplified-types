@@ -1,6 +1,10 @@
 # macOs Directory
 **/.DS_Store
 
+# Generated
+**/.cache
+**/generated
+
 # Vscode
 .vscode/
 # Zed

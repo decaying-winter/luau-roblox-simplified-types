@@ -2,7 +2,13 @@
 local serde = zune.serde;
 local crypto = zune.crypto;
 
+local Stream = require("./stream");
+
 local bit64 = require("../lib/bit64");
+
+local roblox = require("../roblox");
+local datatypes = require("../../datatypes");
+local reflection = require("../../reflection");
 
 local BinaryMagicHeader = "<roblox!\x89\xff\x0d\x0a\x1a\x0a";
 
@@ -16,43 +22,6 @@ local BinaryChunkType = {
     END = 6,
 };
 
-local RobloxPropertyType = {
-    Unknown = 0,
-    String = 1,
-    Bool = 2,
-    Int = 3,
-    Float = 4,
-    Double = 5,
-    UDim = 6,
-    UDim2 = 7,
-    Ray = 8,
-    Faces = 9,
-    Axes = 10,
-    BrickColor = 11,
-    Color3 = 12,
-    Vector2 = 13,
-    Vector3 = 14,
-    -- Padded
-    CFrame = 16,
-    Quaternion = 17,
-    Enum = 18,
-    Ref = 19,
-    Vector3int16 = 20,
-    NumberSequence = 21,
-    ColorSequence = 22,
-    NumberRange = 23,
-    Rect = 24,
-    PhysicalProperties = 25,
-    Color3uint8 = 26,
-    Int64 = 27,
-    SharedString = 28,
-    ProtectedString = 29,
-    OptionalCFrame = 30,
-    UniqueId = 31,
-    FontFace = 32,
-    SecurityCapabilities = 33,
-}
-
 local BinaryChunkTypeMap = {
     ["INST"] = BinaryChunkType.INST,
     ["PROP"] = BinaryChunkType.PROP,
@@ -63,63 +32,27 @@ local BinaryChunkTypeMap = {
     ["END\0"] = BinaryChunkType.END,
 }
 
+local RobloxPropertyType = roblox.PropertyTypes;
+
+type Instance = roblox.Instance;
+type Document = roblox.Document;
+type Signature = roblox.Signature;
+type Property = roblox.Property;
+type DocumentInfo = roblox.DocumentInfo;
+
+type BufferStream = Stream.BufferStream;
+
 export type ChunkInfo = {
     type: number,
     data: buffer,
     reserved: number,
     size: number,
-};
-
-export type DocumentInfo = {
-    version: number,
-    classes: number,
-    instances: number,
-    reserved: number,
-};
-
-export type Class = {
-    index: number,
-    name: string,
-    isService: boolean,
-    instances: {number},
-};
-
-export type Property = {
-    type: number,
-    value: any,
-}
-
-export type Instance = {
-    className: string,
-    referent: number,
-    parent: number?,
-    properties: {[string]: Property},
-    isService: boolean,
-};
-
-export type Signature = {
-    Type: "Ed25519",
-    PublicKey: number,
-    Value: string,
-};
-
-export type SharedString = {
-    Lookup: {[string]: string},
-    Key: string,
-}
-
-export type Document = {
-    info: DocumentInfo,
-    instances: {Instance},
-    classes: {Class},
-    metadata: {[string]: string},
-    sharedstrings: {SharedString},
-    signatures: {Signature}?,
+    id: number,
 };
 
 local BinaryChunkTypeNameMap = {}
 for name: string, value: number in BinaryChunkTypeMap::{[string]: number} do
-    BinaryChunkTypeNameMap[value] = name:gsub('\0', '');
+    BinaryChunkTypeNameMap[value] = name;
 end
 
 local RobloxPropertyTypeNameMap = {}
@@ -127,18 +60,18 @@ for name: string, value: number in RobloxPropertyType::{[string]: number} do
     RobloxPropertyTypeNameMap[value] = name;
 end
 
-local function getBinaryChunkTypeName(type: number): string?
-    return BinaryChunkTypeNameMap[type];
+local function getBinaryChunkTypeName(type: number): string
+    return (assert(BinaryChunkTypeNameMap[type], "Unknown chunk type"));
 end
 
-local function getPropertyTypeName(type: number): string?
-    return RobloxPropertyTypeNameMap[type];
+local function getPropertyTypeName(type: number): string
+    return (assert(RobloxPropertyTypeNameMap[type], "Unknown property type"));
 end
 
 local function rotatei32(b: buffer): number
     local be = buffer.fromstring(buffer.readstring(b, 0, 4):reverse());
     local value = buffer.readi32(be, 0);
-    value = bit32.bxor(bit32.arshift(value, 1), -bit32.band(value, 1));
+    value = bit32.bxor(bit32.rshift(value, 1), -bit32.band(value, 1));
     buffer.writeu32(be, 0, value);
     return buffer.readi32(be, 0);
 end
@@ -171,7 +104,7 @@ end
 local function rotatef32(b: buffer): number
     local be = buffer.fromstring(buffer.readstring(b, 0, 4):reverse());
     local value = buffer.readu32(be, 0);
-    buffer.writei32(be, 0, bit32.bor(bit32.arshift(value, 1), bit32.lshift(value, 31)));
+    buffer.writeu32(be, 0, bit32.bor(bit32.rshift(value, 1), bit32.lshift(value, 31)));
     return buffer.readf32(be, 0);
 end
 
@@ -190,84 +123,709 @@ local function ReadInterleaved<T>(b: buffer, offset: number, count: number, size
     return list;
 end
 
-local function ReadInterleavedi32(b: buffer, offset: number, count: number): {number}
-    return ReadInterleaved(b, offset, count, 4, rotatei32);
-end
-local function ReadInterleavedu32(b: buffer, offset: number, count: number): {number}
-    return ReadInterleaved(b, offset, count, 4, tou32);
+local function WriteInterleaved<T>(values: {T}, size: number, transform: (buffer, number, T) -> ()): buffer
+    local count = #values;
+    local b = buffer.create(count * size);
+    for i = 0, count - 1 do
+        transform(b, i * size, values[i + 1]);
+    end
+
+    local interleaved = buffer.create(count * size);
+
+    local simple_count = count - 1;
+    local iter = 0;
+    for i = 0, size - 1 do
+        for c = 0, simple_count do
+            buffer.writeu8(interleaved, iter, buffer.readu8(b, (c * size) + i))
+            iter += 1;
+        end
+    end
+    return interleaved;
 end
 
-local function ReadInterleavedi64(b: buffer, offset: number, count: number): {buffer}
-    return ReadInterleaved(b, offset, count, 8, rotatei64);
+local function ReadInterleavedi32(stream: BufferStream, count: number): {number}
+    return ReadInterleaved(stream:readbuffer(count * 4), 0, count, 4, rotatei32);
 end
-local function ReadInterleavedu64(b: buffer, offset: number, count: number): {buffer}
-    return ReadInterleaved(b, offset, count, 8, tou64);
-end
-
-local function ReadInterleavedf32(b: buffer, offset: number, count: number): {number}
-    return ReadInterleaved(b, offset, count, 4, rotatef32);
+local function ReadInterleavedu32(stream: BufferStream, count: number): {number}
+    return ReadInterleaved(stream:readbuffer(count * 4), 0, count, 4, tou32);
 end
 
-local function ReadInstances(buffer: buffer, offset: number, count: number): {number}
-    local values = ReadInterleavedi32(buffer, offset, count);
+local function ReadInterleavedi64(stream: BufferStream, count: number): {buffer}
+    return ReadInterleaved(stream:readbuffer(count * 8), 0, count, 8, rotatei64);
+end
+local function ReadInterleavedu64(stream: BufferStream, count: number): {buffer}
+    return ReadInterleaved(stream:readbuffer(count * 8), 0, count, 8, tou64);
+end
+
+local function ReadInterleavedf32(stream: BufferStream, count: number): {number}
+    return ReadInterleaved(stream:readbuffer(count * 4), 0, count, 4, rotatef32);
+end
+
+local function ReadInstances(stream: BufferStream, count: number): {number}
+    local values = ReadInterleavedi32(stream, count);
     for i = 2, count do
         values[i] += values[i - 1];
+    end
+    for i = 1, count do
+        values[i] += 1;
     end
     return values;
 end
 
-local function readChunk(slice: buffer, slice_pos: number)
-    local pos = slice_pos;
-    if (buffer.len(slice) - pos < 16) then
+local function writeRotatei32(b: buffer, offset: number, value: number): ()
+    buffer.writei32(b, offset, bit32.bxor(bit32.lshift(value, 1), bit32.arshift(value, 31)));
+    buffer.writestring(b, offset, buffer.readstring(b, offset, 4):reverse(), 4);
+end
+
+local function writeu32(b: buffer, offset: number, value: number): ()
+    buffer.writeu32(b, offset, value);
+    buffer.writestring(b, offset, buffer.readstring(b, offset, 4):reverse(), 4);
+end
+
+local function writeRotatei64(b: buffer, offset: number, value: buffer): ()
+    local n = bit64.join(buffer.readi32(value, 0), buffer.readi32(value, 4));
+    local v = bit64.bxor(bit64.lshift(n, 1), bit64.rshift(n, 63));
+
+    local high, low = bit64.split(v);
+    buffer.writei32(b, 0, high);
+    buffer.writei32(b, 4, low);
+
+    buffer.writestring(b, offset, buffer.readstring(b, offset, 8):reverse(), 4);
+end
+local function writeu64(b: buffer, offset: number, value: buffer): ()
+    buffer.writestring(b, offset, buffer.readstring(value, 0, 8):reverse(), 4);
+end
+
+local function writeRotatef32(b: buffer, offset: number, value: number): ()
+    buffer.writef32(b, offset, value);
+    local v = buffer.readu32(b, offset);
+    buffer.writeu32(b, offset, bit32.bor(bit32.lshift(v, 1), bit32.rshift(v, 31)));
+    buffer.writestring(b, offset, buffer.readstring(b, offset, 4):reverse(), 4);
+end
+
+local function WriteInterleavedi32(values: {number}): buffer
+    return WriteInterleaved(values, 4, writeRotatei32);
+end
+local function WriteInterleavedu32(values: {number}): buffer
+    return WriteInterleaved(values, 4, writeu32);
+end
+
+local function WriteInterleavedi64(values: {buffer}): buffer
+    return WriteInterleaved(values, 8, writeRotatei64);
+end
+local function WriteInterleavedu64(values: {buffer}): buffer
+    return WriteInterleaved(values, 8, writeu64);
+end
+local function WriteInterleavedf32(values: {number}): buffer
+    return WriteInterleaved(values, 4, writeRotatef32);
+end
+
+local function WriteInstances(values: {number}): buffer
+    local copy = table.clone(values);
+    for i = 1, #values do
+        copy[i] -= 1;
+    end
+    for i = 2, #values do
+        copy[i] -= values[i - 1] - 1;
+    end
+    return WriteInterleavedi32(copy);
+end
+
+local function size(t: {[any]: any}): number
+    local c = 0;
+    for _, _ in t do
+        c += 1;
+    end
+    return c;
+end
+
+local function writeChunk(
+    stream: BufferStream,
+    handle: (stream: BufferStream) -> boolean
+): ()
+    local chunk_stream = Stream.new(4);
+    local compressed = handle(chunk_stream);
+    chunk_stream:trim();
+
+    local size = buffer.len(chunk_stream.buffer);
+
+    local data = if (compressed) then
+        serde.lz4.compress(chunk_stream.buffer)
+    else
+        chunk_stream.buffer;
+
+    stream:writeu32(if (compressed) then buffer.len(data) else 0);
+    stream:writeu32(size);
+    stream:writeu32(0);
+    stream:writebuffer(data);
+end
+
+local function propertiesToValues(values: {Property}): {any}
+    local list = table.create(#values);
+    for i, value in values do
+        list[i] = value.value;
+    end
+    return list;
+end
+
+local function cframeSerializer(type: number, values: {Property}, stream: BufferStream)
+    local len = #values;
+    if (type == RobloxPropertyType.OptionalCFrame) then
+        stream:writeu8(RobloxPropertyType.CFrame);
+    end
+
+    local xs = table.create(len);
+    local ys = table.create(len);
+    local zs = table.create(len);
+
+    for i, value in values do
+        local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22;
+        if (value.value) then
+            x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = datatypes.CFrame.Serialize(value.value);
+        else
+            x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0;
+        end
+        xs[i] = x;
+        ys[i] = y;
+        zs[i] = z;
+
+        stream:writeu8(0);
+
+        if (type == RobloxPropertyType.Quaternion) then
+            local qt = (r00 + r11 + r22);
+            if (qt > 0) then
+                local s = math.sqrt(qt + 1);
+                local r = 0.5 / s;
+
+                stream:writef32((r21 - r12) * r);
+                stream:writef32((r02 - r20) * r);
+                stream:writef32((r10 - r01) * r);
+                stream:writef32(s * 0.5);
+            else
+                local big = math.max(r00, r11, r22);
+                if (big == r00) then
+                    local s = math.sqrt(1 + r00 - r11 - r22);
+                    local r = 0.5 / s;
+
+                    stream:writef32(0.5 * s);
+                    stream:writef32((r10 + r01) * r);
+                    stream:writef32((r02 + r20) * r);
+                    stream:writef32((r21 - r12) * r);
+                elseif (big == r11) then
+                    local s = math.sqrt(1 - r00 + r11 - r22);
+                    local r = 0.5 / s;
+
+                    stream:writef32((r10 + r01) * r);
+                    stream:writef32(0.5 * s);
+                    stream:writef32((r21 + r12) * r);
+                    stream:writef32((r02 - r20) * r);
+                elseif (big == r22) then
+                    local s = math.sqrt(1 - r00 - r11 + r22);
+                    local r = 0.5 / s;
+
+                    stream:writef32((r02 + r20) * r);
+                    stream:writef32((r21 + r12) * r);
+                    stream:writef32(0.5 * s);
+                    stream:writef32((r10 - r01) * r);
+                end
+            end
+        else
+            stream:writef32(r00);
+            stream:writef32(r01);
+            stream:writef32(r02);
+            stream:writef32(r10);
+            stream:writef32(r11);
+            stream:writef32(r12);
+            stream:writef32(r20);
+            stream:writef32(r21);
+            stream:writef32(r22);
+        end
+    end
+    stream:writebuffer(WriteInterleavedf32(xs));
+    stream:writebuffer(WriteInterleavedf32(ys));
+    stream:writebuffer(WriteInterleavedf32(zs));
+
+    if (type == RobloxPropertyType.OptionalCFrame) then
+        stream:writeu8(RobloxPropertyType.Bool);
+        for i, value in values do
+            stream:writeu8(if (value.value) then 1 else 0);
+        end
+    end
+end
+
+local PropertySerializerMap = {
+    [RobloxPropertyType.Unknown] = function(values: {Property}, stream: BufferStream)
+        error("Unknown Property Type not supported.")
+    end,
+    [RobloxPropertyType.String] = function(values: {Property}, stream: BufferStream)
+        for _, value in values do
+            stream:writestring(value.value);
+        end
+    end,
+    [RobloxPropertyType.Bool] = function(values: {Property}, stream: BufferStream)
+        stream:expandToSize(stream.position + #values); -- preallocate
+        for _, value in values do
+            stream:writeu8(if (value.value) then 1 else 0);
+        end
+    end,
+    [RobloxPropertyType.Int] = function(values: {Property}, stream: BufferStream)
+        stream:writebuffer(WriteInterleavedi32(propertiesToValues(values)));
+    end,
+    [RobloxPropertyType.Float] = function(values: {Property}, stream: BufferStream)
+        stream:writebuffer(WriteInterleavedf32(propertiesToValues(values)));
+    end,
+    [RobloxPropertyType.Double] = function(values: {Property}, stream: BufferStream)
+        stream:expandToSize(stream.position + (#values * 8)); -- preallocate
+        for _, value in values do
+            stream:writef64(value.value);
+        end
+    end,
+    [RobloxPropertyType.UDim] = function(values: {Property}, stream: BufferStream)
+        local len = #values;
+        local scales = table.create(len);
+        local offsets = table.create(len);
+        for i, value in values do
+            local scale, offset = datatypes.UDim.Serialize(value.value);
+            scales[i] = scale;
+            offsets[i] = offset;
+        end
+        stream:writebuffer(WriteInterleavedf32(scales));
+        stream:writebuffer(WriteInterleavedi32(offsets));
+    end,
+    [RobloxPropertyType.UDim2] = function(values: {Property}, stream: BufferStream)
+        local len = #values;
+        local scales_x = table.create(len);
+        local scales_y = table.create(len);
+        local offsets_x = table.create(len);
+        local offsets_y = table.create(len);
+        for i, value in values do
+            local scale_x, offset_x, scale_y, offset_y = datatypes.UDim2.Serialize(value.value);
+            scales_x[i] = scale_x;
+            offsets_x[i] = offset_x;
+            scales_y[i] = scale_y;
+            offsets_y[i] = offset_y;
+        end
+        stream:writebuffer(WriteInterleavedf32(scales_x));
+        stream:writebuffer(WriteInterleavedf32(scales_y));
+        stream:writebuffer(WriteInterleavedi32(offsets_x));
+        stream:writebuffer(WriteInterleavedi32(offsets_y));
+    end,
+    [RobloxPropertyType.Ray] = function(values: {Property}, stream: BufferStream)
+        stream:expandToSize(stream.position + (#values * 24)); -- preallocate
+        for i, value in values do
+            local pos_x, pos_y, pos_z, dir_x, dir_y, dir_z = datatypes.Ray.Serialize(value.value);
+
+            stream:writef32(pos_x);
+            stream:writef32(pos_y);
+            stream:writef32(pos_z);
+            stream:writef32(dir_x);
+            stream:writef32(dir_y);
+            stream:writef32(dir_z);
+        end
+    end,
+    [RobloxPropertyType.Faces] = function(values: {Property}, stream: BufferStream)
+        stream:expandToSize(stream.position + #values); -- preallocate
+        for _, value in values do
+            stream:writeu8(datatypes.Faces.Serialize(value.value));
+        end
+    end,
+    [RobloxPropertyType.Axes] = function(values: {Property}, stream: BufferStream)
+        stream:expandToSize(stream.position + #values); -- preallocate
+        for _, value in values do
+            stream:writeu8(datatypes.Axes.Serialize(value.value));
+        end
+    end,
+    [RobloxPropertyType.BrickColor] = function(values: {Property}, stream: BufferStream)
+        local list = table.create(#values);
+        for i, value in values do
+            list[i] = datatypes.BrickColor.Serialize(value.value);
+        end
+        stream:writebuffer(WriteInterleavedu32(list));
+    end,
+    [RobloxPropertyType.Color3] = function(values: {Property}, stream: BufferStream)
+        local len = #values;
+        local rs = table.create(len);
+        local gs = table.create(len);
+        local bs = table.create(len);
+        for i, value in values do
+            rs[i], gs[i], bs[i] = datatypes.Color3.Serialize(value.value, false);
+        end
+        stream:writebuffer(WriteInterleavedf32(rs));
+        stream:writebuffer(WriteInterleavedf32(gs));
+        stream:writebuffer(WriteInterleavedf32(bs));
+    end,
+    [RobloxPropertyType.Vector2] = function(values: {Property}, stream: BufferStream)
+        local len = #values;
+        local xs = table.create(len);
+        local ys = table.create(len);
+        for i, value in values do
+            xs[i], ys[i] = datatypes.Vector2.Serialize(value.value);
+        end
+        stream:writebuffer(WriteInterleavedf32(xs));
+        stream:writebuffer(WriteInterleavedf32(ys));
+    end,
+    [RobloxPropertyType.Vector3] = function(values: {Property}, stream: BufferStream)
+        local len = #values;
+        local xs = table.create(len);
+        local ys = table.create(len);
+        local zs = table.create(len);
+        for i, value in values do
+            xs[i], ys[i], zs[i] = datatypes.Vector3.Serialize(value.value);
+        end
+        stream:writebuffer(WriteInterleavedf32(xs));
+        stream:writebuffer(WriteInterleavedf32(ys));
+        stream:writebuffer(WriteInterleavedf32(zs));
+    end,
+    [RobloxPropertyType.CFrame] = function(values: {Property}, stream: BufferStream)
+        cframeSerializer(RobloxPropertyType.CFrame, values, stream);
+    end,
+    [RobloxPropertyType.Quaternion] = function(values: {Property}, stream: BufferStream)
+        cframeSerializer(RobloxPropertyType.Quaternion, values, stream);
+    end,
+    [RobloxPropertyType.Enum] = function(values: {Property}, stream: BufferStream)
+        local list = table.create(#values);
+        for i, value in values do
+            list[i] =
+                if (datatypes.EnumItem.Is(value.value)) then
+                    assert(table.find(
+                        value.value.EnumType:GetEnumItems(),
+                        value.value
+                    ), "Invalid Enum data") - 1
+                else
+                    value.value - 1;
+        end
+        stream:writebuffer(WriteInterleavedu32(list));
+    end,
+    [RobloxPropertyType.Ref] = function(values: {Property}, stream: BufferStream)
+        local list = table.create(#values);
+        for i, value in values do
+            list[i] = if (value.value) then value.value else 0;
+        end
+        stream:writebuffer(WriteInstances(list));
+    end,
+    [RobloxPropertyType.Vector3int16] = function(values: {Property}, stream: BufferStream)
+        stream:expandToSize(stream.position + (#values * 6)); -- preallocate
+        for i, value in values do
+            local x, y, z = datatypes.Vector3int16.Serialize(value.value);
+
+            stream:writei16(x);
+            stream:writei16(y);
+            stream:writei16(z);
+        end
+    end,
+    [RobloxPropertyType.NumberSequence] = function(values: {Property}, stream: BufferStream)
+        stream:expandToSize(stream.position + (#values * 4)); -- preallocate (under-estimate)
+        for i, value in values do
+            local points = datatypes.NumberSequence.Serialize(value.value);
+            stream:writeu32(#points);
+            for _, point in points do
+                local time, val, envelope = datatypes.NumberSequenceKeypoint.Serialize(point);
+
+                stream:writef32(time);
+                stream:writef32(val);
+                stream:writef32(envelope);
+            end
+        end
+    end,
+    [RobloxPropertyType.ColorSequence] = function(values: {Property}, stream: BufferStream)
+        stream:expandToSize(stream.position + (#values * 4)); -- preallocate (under-estimate)
+        for i, value in values do
+            local points = datatypes.ColorSequence.Serialize(value.value);
+            stream:writeu32(#points);
+            for _, point in points do
+                local time, color, envelope = datatypes.ColorSequenceKeypoint.Serialize(point);
+                local r, g, b = datatypes.Color3.Serialize(color, false);
+                stream:writef32(time);
+                stream:writef32(r);
+                stream:writef32(g);
+                stream:writef32(b);
+                stream:writef32(envelope);
+            end
+        end
+    end,
+    [RobloxPropertyType.NumberRange] = function(values: {Property}, stream: BufferStream)
+        stream:expandToSize(stream.position + (#values * 8)); -- preallocate
+        for i, value in values do
+            local min, max = datatypes.NumberRange.Serialize(value.value);
+            stream:writef32(min);
+            stream:writef32(max);
+        end
+    end,
+    [RobloxPropertyType.Rect] = function(values: {Property}, stream: BufferStream)
+        local len = #values;
+        local x0s = table.create(len);
+        local y0s = table.create(len);
+        local x1s = table.create(len);
+        local y1s = table.create(len);
+        for i = 1, len do
+            x0s[i], y0s[i], x1s[i], y1s[i] = datatypes.Rect.Serialize(values[i].value);
+        end
+        stream:writebuffer(WriteInterleavedf32(x0s));
+        stream:writebuffer(WriteInterleavedf32(y0s));
+        stream:writebuffer(WriteInterleavedf32(x1s));
+        stream:writebuffer(WriteInterleavedf32(y1s));
+    end,
+    [RobloxPropertyType.PhysicalProperties] = function(values: {Property}, stream: BufferStream)
+        stream:expandToSize(stream.position + #values); -- preallocate (under-estimate)
+        for i, value in values do
+            if (value.value) then
+                local density, friction, elasticity, friction_weight, elasticity_weight = datatypes.PhysicalProperties.Serialize(value.value);
+                stream:writeu8(1);
+                stream:writef32(density);
+                stream:writef32(friction);
+                stream:writef32(elasticity);
+                stream:writef32(friction_weight);
+                stream:writef32(elasticity_weight);
+            else
+                stream:writeu8(0);
+            end
+        end
+    end,
+    [RobloxPropertyType.Color3uint8] = function(values: {Property}, stream: BufferStream)
+        stream:expandToSize(stream.position + (#values * 3)); -- preallocate
+        for i, value in values do
+            local r, g, b = datatypes.Color3.Serialize(value.value, true);
+
+            stream:writeu8(r);
+            stream:writeu8(g);
+            stream:writeu8(b);
+        end
+    end,
+    [RobloxPropertyType.Int64] = function(values: {Property}, stream: BufferStream)
+        local list = table.create(#values);
+        for i, value in values do
+            list[i] = value.value;
+        end
+        stream:writebuffer(WriteInterleavedi64(list));
+    end,
+    [RobloxPropertyType.SharedString] = function(values: {Property}, stream: BufferStream)
+        local keys = table.create(#values);
+        for i, value in values do
+            keys[i] = value.value;
+        end
+        stream:writebuffer(WriteInterleavedu32(keys));
+    end,
+    [RobloxPropertyType.ProtectedString] = function(values: {Property}, stream: BufferStream)
+        for i, value in values do
+            stream:writeu32(buffer.len(value.value));
+            stream:writebuffer(value.value);
+        end
+    end,
+    [RobloxPropertyType.OptionalCFrame] = function(values: {Property}, stream: BufferStream)
+        cframeSerializer(RobloxPropertyType.OptionalCFrame, values, stream);
+    end,
+    [RobloxPropertyType.UniqueId] = function(values: {Property}, stream: BufferStream)
+        stream:writebuffer(WriteInterleaved(values, 16, function(b: buffer, offset: number, property)
+            local value = property.value;
+            buffer.copy(b, offset, value.random, 0, 8);
+            buffer.writeu32(b, offset + 8, value.index);
+            buffer.writeu32(b, offset + 12, value.time);
+        end));
+    end,
+    [RobloxPropertyType.Font] = function(values: {Property}, stream: BufferStream)
+        for i, value in values do
+            local family, weight, style, cacheId = datatypes.Font.Serialize(value.value);
+            stream:writestring(family);
+            stream:writeu16(weight);
+            stream:writeu8(style);
+            stream:writestring(cacheId or "");
+        end
+    end,
+    [RobloxPropertyType.SecurityCapabilities] = function(values: {Property}, stream: BufferStream)
+        local capabilities = table.create(#values);
+        for i, value in values do
+            capabilities[i] = value.value;
+        end
+        stream:writebuffer(WriteInterleavedu64(capabilities));
+    end,
+}
+
+local function serialize(document: Document): buffer
+    local stream = Stream.new(#BinaryMagicHeader);
+
+    stream:writerawstring(BinaryMagicHeader);
+
+    stream:writeu16(document.info.version);
+    stream:writeu32(#document.classes);
+    stream:writeu32(#document.instances);
+
+    --[[ reserved ]] do
+        stream:writebuffer(document.info.reserved, 8);
+    end
+
+    local metadata_size = size(document.metadata);
+    if (metadata_size > 0) then
+        stream:writerawstring(getBinaryChunkTypeName(BinaryChunkType.META));
+        writeChunk(stream, function(chunk)
+            chunk:writeu32(metadata_size);
+            for key, value in document.metadata do
+                chunk:writestring(key);
+                chunk:writestring(value);
+            end
+            return true;
+        end)
+    end
+
+    --[[SSTR]] do
+        stream:writerawstring(getBinaryChunkTypeName(BinaryChunkType.SSTR));
+        writeChunk(stream, function(chunk)
+            chunk:writeu32(0);
+            chunk:writeu32(#document.sharedstrings);
+            local blank = string.rep("\0\0\0\0", 4);
+            for _, sharedstring in document.sharedstrings do
+                chunk:writerawstring(blank);
+                local lookup = sharedstring.Lookup[sharedstring.Key];
+                assert(lookup, "Missing string");
+                chunk:writestring(lookup);
+            end
+            return true;
+        end)
+    end
+
+    --[[SIGN]] if (document.signatures) then
+        local signatures = document.signatures;
+        stream:writerawstring(getBinaryChunkTypeName(BinaryChunkType.SIGN));
+        writeChunk(stream, function(chunk)
+            chunk:writeu32(#signatures);
+            for _, sign in signatures do
+                chunk:writeu32(0);
+                chunk:writebuffer(sign.PublicKey);
+                chunk:writestring(sign.Value);
+            end
+            return true;
+        end)
+    end
+
+    --[[INST]] for _, class in document.classes do
+        if (#class.instances == 0) then
+            continue;
+        end
+        stream:writerawstring(getBinaryChunkTypeName(BinaryChunkType.INST));
+        writeChunk(stream, function(chunk)
+            chunk:writeu32(class.index - 1);
+            chunk:writestring(class.name);
+            chunk:writeu8(if (class.isService) then 1 else 0);
+            chunk:writeu32(#class.instances);
+
+            chunk:writebuffer(WriteInstances(class.instances));
+
+            if (class.isService) then
+                for _, id in class.instances do
+                    local instance = document.instances[id];
+                    chunk:writeu8(if (instance.parent == nil) then 1 else 0)
+                end
+            end
+
+            return true;
+        end)
+    end
+
+    --[[PROP]] for _, class in document.classes do
+        if (#class.instances == 0) then
+            continue;
+        end
+        local instance = document.instances[class.instances[1]];
+        for name, value in instance.properties do
+            if (name:sub(1, 2) == "__") then
+                continue;
+            end
+            if (PropertySerializerMap[value.type] == nil) then
+                print(`[dom] Unsupported property type: {getPropertyTypeName(value.type)}`);
+                continue;
+            end
+            stream:writerawstring(getBinaryChunkTypeName(BinaryChunkType.PROP));
+            writeChunk(stream, function(chunk)
+                chunk:writeu32(class.index - 1);
+                chunk:writestring(name);
+                chunk:writeu8(value.type);
+
+                local values = table.create(#class.instances);
+                for _, id in class.instances do
+                    local instance = document.instances[id];
+                    local prop = instance.properties[name];
+                    assert(prop, `Instance {id} missing property '{name}'`);
+                    table.insert(values, prop);
+                end
+
+                PropertySerializerMap[value.type](values, chunk);
+
+                return true;
+            end)
+        end
+    end
+
+    --[[PRNT]] do
+        stream:writerawstring(getBinaryChunkTypeName(BinaryChunkType.PRNT));
+        writeChunk(stream, function(chunk)
+            local instance_len = #document.instances;
+            local child_ids = table.create(instance_len);
+            local parents_ids = table.create(instance_len);
+            for i = 1, instance_len do
+                local instance = document.instances[i];
+                child_ids[i] = instance.referent;
+                parents_ids[i] = if (instance.parent) then instance.parent else 0;
+            end
+
+            chunk:writeu8(0);
+            chunk:writeu32(instance_len);
+            chunk:writebuffer(WriteInstances(child_ids));
+            chunk:writebuffer(WriteInstances(parents_ids));
+
+            return true;
+        end)
+    end
+
+    --[[END\0]] do
+        stream:writerawstring(getBinaryChunkTypeName(BinaryChunkType.END));
+        writeChunk(stream, function(chunk)
+            chunk:writerawstring("</roblox>");
+            return false;
+        end)
+    end
+
+    stream:trim();
+
+    return stream.buffer;
+end
+
+local function readChunk(stream: BufferStream): ChunkInfo
+    if (not stream:couldRead(16)) then
         error("Too small");
     end
 
-    local chunk_type = BinaryChunkTypeMap[buffer.readstring(slice, pos, 4)];
+    local chunk_type = BinaryChunkTypeMap[buffer.tostring(stream:readbuffer(4))];
     assert(chunk_type, "Invalid chunk type");
-    pos += 4;
-    local compressed_size = buffer.readu32(slice, pos);
-    pos += 4;
-    local size = buffer.readu32(slice, pos);
-    pos += 4;
-    local reserved = buffer.readu32(slice, pos);
-    pos += 4;
+    local compressed_size = stream:readu32();
+    local size = stream:readu32();
+    local reserved = stream:readu32();
 
     local data: buffer = nil;
     if (compressed_size > 0) then
-        local compressed_start = pos;
-        pos += compressed_size;
-        local byte = buffer.readu8(slice, compressed_start);
+        local byte = stream:readu8()
+        stream:move(-1);
         if (byte == 0x58 or byte == 0x78) then
             print("zlib");
-            data = buffer.fromstring(
-                serde.zlib.decompress(
-                    buffer.readstring(slice, compressed_start, compressed_size)
-                )
-            );
-        elseif (buffer.readstring(slice, compressed_start + 1, 3) == "\xB5\x2F\xFD") then
+            data = serde.zlib.decompress(stream:readbuffer(compressed_size));
+        elseif (buffer.readstring(stream.buffer, stream.position + 1, 3) == "\xB5\x2F\xFD") then
             print("zstd ");
             error("not supported yet")
         else
-            data = buffer.fromstring(
-                serde.lz4.decompress(
-                    buffer.readstring(slice, compressed_start, compressed_size),
-                    size
-                )
+            data = serde.lz4.decompress(
+                stream:readbuffer(compressed_size),
+                size
             );
         end
     else
-        data = buffer.fromstring(buffer.readstring(slice, pos, size));
-        pos += size;
+        data = stream:readbuffer(size);
     end
 
-    local chunk: ChunkInfo = {
+    return {
         type = chunk_type,
         data = data,
         reserved = reserved,
         size = size,
+        id = -1,
     };
-
-    return chunk, pos;
 end
 
 local MatricesMap = {
@@ -393,34 +951,28 @@ local MatricesMap = {
     },
 }
 
-local function cframeDeserializer(type: number, values: {any}, len: number, chunk: ChunkInfo, pos: number)
-    local data = chunk.data;
+local function cframeDeserializer(type: number, values: {any}, property_name: string, stream: BufferStream)
+    local len = #values;
     if (type == RobloxPropertyType.OptionalCFrame) then
-        local byte = buffer.readu8(data, pos);
-        pos += 1;
+        local byte = stream:readu8();
         if (byte ~= RobloxPropertyType.CFrame) then
             for i = 1, len do
-                values[i] = { OptionalCFrame = nil };
+                values[i] = nil;
             end
             return;
         end
     end
     local matrices = table.create(len);
     for i = 1, len do
-        local orient_id = buffer.readu8(data, pos);
-        pos += 1;
+        local orient_id = stream:readu8();
         if (orient_id > 0) then
             local matrix = MatricesMap[orient_id] or error("Unknown CFrame Rotation Id");
             matrices[i] = matrix;
         elseif (type == RobloxPropertyType.Quaternion) then
-            local qx = buffer.readf32(data, pos);
-            pos += 4;
-            local qy = buffer.readf32(data, pos);
-            pos += 4;
-            local qz = buffer.readf32(data, pos);
-            pos += 4;
-            local qw = buffer.readf32(data, pos);
-            pos += 4;
+            local qx = stream:readf32();
+            local qy = stream:readf32();
+            local qz = stream:readf32();
+            local qw = stream:readf32();
 
             local xc = qx * 2;
             local yc = qy * 2;
@@ -446,41 +998,34 @@ local function cframeDeserializer(type: number, values: {any}, len: number, chun
         else
             local matrix = table.create(9);
             for j = 1, 9 do
-                matrix[j] = buffer.readf32(data, pos);
-                pos += 4;
+                matrix[j] = stream:readf32();
             end
             matrices[i] = matrix;
         end
     end
-    local step = len * 4;
-    local cxs = ReadInterleavedf32(data, pos, len);
-    pos += step;
-    local cys = ReadInterleavedf32(data, pos, len);
-    pos += step;
-    local czs = ReadInterleavedf32(data, pos, len);
-    pos += step;
+    local cxs = ReadInterleavedf32(stream, len);
+    local cys = ReadInterleavedf32(stream, len);
+    local czs = ReadInterleavedf32(stream, len);
 
     local cframes = table.create(len);
     for i = 1, len do
-        cframes[i] = {
+        cframes[i] = datatypes.CFrame.Deserialize(
             cxs[i], cys[i], czs[i],
             unpack(matrices[i])
-        }
+        );
     end
 
     if (type == RobloxPropertyType.OptionalCFrame) then
-        local byte = buffer.readu8(data, pos);
-        pos += 1;
+        local byte = stream:readu8();
         if (byte ~= RobloxPropertyType.Bool) then
             for i = 1, len do
-                values[i] = { OptionalCFrame = cframes[i] };
+                values[i] = cframes[i];
             end
         else
             for i = 1, len do
-                local exists = buffer.readu8(data, pos) ~= 0;
-                pos += 1;
+                local exists = stream:readu8() ~= 0;
                 if (not exists) then
-                    values[i] = { OptionalCFrame = nil };
+                    values[i] = nil;
                     continue;
                 end
                 values[i] = cframes[i];
@@ -494,303 +1039,257 @@ local function cframeDeserializer(type: number, values: {any}, len: number, chun
 end
 
 local PropertyDeserializerMap = {
-    [RobloxPropertyType.Unknown] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
+    [RobloxPropertyType.Unknown] = function(values: {any}, property_name: string, stream: BufferStream)
         error("Unknown Property Type not supported.")
     end,
-    [RobloxPropertyType.String] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.String] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            local str_len = buffer.readu32(data, pos);
-            pos += 4;
-            values[i] = buffer.readstring(data, pos, str_len);
-            pos += str_len;
+            values[i] = stream:readstring();
         end
     end,
-    [RobloxPropertyType.Bool] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.Bool] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            values[i] = buffer.readu8(data, pos) ~= 0;
-            pos += 1;
+            values[i] = stream:readu8() ~= 0;
         end
     end,
-    [RobloxPropertyType.Int] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local list = ReadInterleavedi32(chunk.data, pos, len);
+    [RobloxPropertyType.Int] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local list = ReadInterleavedi32(stream, len);
         for i = 1, len do
             values[i] = list[i];
         end
     end,
-    [RobloxPropertyType.Float] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local list = ReadInterleavedf32(chunk.data, pos, len);
+    [RobloxPropertyType.Float] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local list = ReadInterleavedf32(stream, len);
         for i = 1, len do
             values[i] = list[i];
         end
     end,
-    [RobloxPropertyType.Double] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.Double] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            values[i] = buffer.readf64(data, pos + i - 1)
+            values[i] = stream:readf64();
         end
     end,
-    [RobloxPropertyType.UDim] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local step = len * 4;
-        local scales = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
-        local offsets = ReadInterleavedi32(chunk.data, pos, len);
-        pos += step;
+    [RobloxPropertyType.UDim] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local scales = ReadInterleavedf32(stream, len);
+        local offsets = ReadInterleavedi32(stream, len);
         for i = 1, len do
-            values[i] = { Scale = scales[i], Offset = offsets[i] };
+            values[i] = datatypes.UDim.Deserialize(scales[i], offsets[i]);
         end
     end,
-    [RobloxPropertyType.UDim2] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local step = len * 4;
-        local scales_x = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
-        local scales_y = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
-        local offsets_x = ReadInterleavedi32(chunk.data, pos, len);
-        pos += step;
-        local offsets_y = ReadInterleavedi32(chunk.data, pos, len);
-        pos += step;
+    [RobloxPropertyType.UDim2] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local scales_x = ReadInterleavedf32(stream, len);
+        local scales_y = ReadInterleavedf32(stream, len);
+        local offsets_x = ReadInterleavedi32(stream, len);
+        local offsets_y = ReadInterleavedi32(stream, len);
         for i = 1, len do
-            values[i] = {
-                X = { Scale = scales_x[i], Offset = offsets_x[i] },
-                Y = { Scale = scales_y[i], Offset = offsets_y[i] },
-            };
+            values[i] = datatypes.UDim2.Deserialize(scales_x[i], offsets_x[i], scales_y[i], offsets_y[i]);
         end
     end,
-    [RobloxPropertyType.Ray] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.Ray] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            local pos_x = buffer.readf32(data, pos);
-            pos += 4;
-            local pos_y = buffer.readf32(data, pos);
-            pos += 4;
-            local pos_z = buffer.readf32(data, pos);
-            pos += 4;
-            local dir_x = buffer.readf32(data, pos);
-            pos += 4;
-            local dir_y = buffer.readf32(data, pos);
-            pos += 4;
-            local dir_z = buffer.readf32(data, pos);
-            pos += 4;
-            values[i] = { pos_x, pos_y, pos_z, dir_x, dir_y, dir_z };
+            values[i] = datatypes.Ray.Deserialize(
+                stream:readf32(), stream:readf32(), stream:readf32(),
+                stream:readf32(), stream:readf32(), stream:readf32()
+            );
         end
     end,
-    [RobloxPropertyType.Faces] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.Faces] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            values[i] = buffer.readu8(data, pos + i - 1);
+            values[i] = datatypes.Faces.Deserialize(stream:readu8());
         end
     end,
-    [RobloxPropertyType.Axes] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.Axes] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            values[i] = buffer.readu8(data, pos + i - 1);
+            values[i] = datatypes.Axes.Deserialize(stream:readu8());
         end
     end,
-    [RobloxPropertyType.BrickColor] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local list = ReadInterleavedi32(chunk.data, pos, len);
+    [RobloxPropertyType.BrickColor] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local list = ReadInterleavedu32(stream, len);
         for i = 1, len do
-            values[i] = list[i];
+            values[i] = datatypes.BrickColor.Deserialize(list[i]);
         end
     end,
-    [RobloxPropertyType.Color3] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local step = len * 4;
-        local rs = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
-        local gs = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
-        local bs = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
+    [RobloxPropertyType.Color3] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local rs = ReadInterleavedf32(stream, len);
+        local gs = ReadInterleavedf32(stream, len);
+        local bs = ReadInterleavedf32(stream, len);
         for i = 1, len do
-            values[i] = { rs[i], gs[i], bs[i] };
+            values[i] = datatypes.Color3.Deserialize(rs[i], gs[i], bs[i], false);
         end
     end,
-    [RobloxPropertyType.Vector2] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local step = len * 4;
-        local xs = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
-        local ys = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
+    [RobloxPropertyType.Vector2] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local xs = ReadInterleavedf32(stream, len);
+        local ys = ReadInterleavedf32(stream, len);
         for i = 1, len do
-            values[i] = { xs[i], ys[i] };
+            values[i] = datatypes.Vector2.Deserialize(xs[i], ys[i]);
         end
     end,
-    [RobloxPropertyType.Vector3] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local step = len * 4;
-        local xs = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
-        local ys = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
-        local zs = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
+    [RobloxPropertyType.Vector3] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local xs = ReadInterleavedf32(stream, len);
+        local ys = ReadInterleavedf32(stream, len);
+        local zs = ReadInterleavedf32(stream, len);
         for i = 1, len do
-            values[i] = vector.create(xs[i], ys[i], zs[i]);
+            values[i] = datatypes.Vector3.Deserialize(xs[i], ys[i], zs[i]);
         end
     end,
-    [RobloxPropertyType.CFrame] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        cframeDeserializer(RobloxPropertyType.CFrame, values, len, chunk, pos);
+    [RobloxPropertyType.CFrame] = function(values: {any}, property_name: string, stream: BufferStream)
+        cframeDeserializer(RobloxPropertyType.CFrame, values, property_name, stream);
     end,
-    [RobloxPropertyType.Quaternion] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        cframeDeserializer(RobloxPropertyType.Quaternion, values, len, chunk, pos);
+    [RobloxPropertyType.Quaternion] = function(values: {any}, property_name: string, stream: BufferStream)
+        cframeDeserializer(RobloxPropertyType.Quaternion, values, property_name, stream);
     end,
-    [RobloxPropertyType.Enum] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local list = ReadInterleavedu32(chunk.data, pos, len);
+    [RobloxPropertyType.Enum] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local list = ReadInterleavedu32(stream, len);
         for i = 1, len do
-            values[i] = list[i];
+            values[i] = list[i] + 1;
         end
     end,
-    [RobloxPropertyType.Ref] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local list = ReadInstances(chunk.data, pos, len);
+    [RobloxPropertyType.Ref] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local list = ReadInstances(stream, len);
         for i = 1, len do
             values[i] = if (list[i] > 0) then list[i] else nil;
         end
     end,
-    [RobloxPropertyType.Vector3int16] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.Vector3int16] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            local x = buffer.readi16(data, pos);
-            pos += 2;
-            local y = buffer.readi16(data, pos);
-            pos += 2;
-            local z = buffer.readi16(data, pos);
-            pos += 2;
-            values[i] = { x, y, z };
+            local x = stream:readi16();
+            local y = stream:readi16();
+            local z = stream:readi16();
+            values[i] = datatypes.Vector3int16.Deserialize(x, y, z);
         end
     end,
-    [RobloxPropertyType.NumberSequence] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.NumberSequence] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            local keys = buffer.readu32(data, pos);
-            pos += 4;
+            local keys = stream:readu32();
             local points = table.create(keys);
             for j = 1, keys do
-                local time = buffer.readf32(data, pos);
-                pos += 4;
-                local value = buffer.readf32(data, pos);
-                pos += 4;
-                local envelope = buffer.readf32(data, pos);
-                pos += 4;
-                points[j] = { Time = time, Value = value, Envelope = envelope };
+                local time = stream:readf32();
+                local value = stream:readf32();
+                local envelope = stream:readf32();
+                points[j] = datatypes.NumberSequenceKeypoint.Deserialize(
+                    time, value, envelope
+                );
             end
-            values[i] = points;
+            values[i] = datatypes.NumberSequence.Deserialize(points);
         end
     end,
-    [RobloxPropertyType.ColorSequence] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.ColorSequence] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            local keys = buffer.readu32(data, pos);
-            pos += 4;
+            local keys = stream:readu32();
             local points = table.create(keys);
             for j = 1, keys do
-                local time = buffer.readf32(data, pos);
-                pos += 4;
-                local r = buffer.readf32(data, pos);
-                pos += 4;
-                local g = buffer.readf32(data, pos);
-                pos += 4;
-                local b = buffer.readf32(data, pos);
-                pos += 4;
-                local envelope = buffer.readf32(data, pos);
-                pos += 4;
-                points[j] = { Time = time, Value = { r, g, b }, Envelope = envelope };
+                local time = stream:readf32();
+                local r = stream:readf32();
+                local g = stream:readf32();
+                local b = stream:readf32();
+                local envelope = stream:readf32();
+                points[j] = datatypes.ColorSequenceKeypoint.Deserialize(
+                    time, datatypes.Color3.Deserialize(r, g, b, false), envelope
+                );
             end
-            values[i] = points;
+            values[i] = datatypes.ColorSequence.Deserialize(points);
         end
     end,
-    [RobloxPropertyType.NumberRange] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.NumberRange] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            local min = buffer.readf32(data, pos);
-            pos += 4;
-            local max = buffer.readf32(data, pos);
-            pos += 4;
-            values[i] = {Min = min, Max = max};
+            local min = stream:readf32();
+            local max = stream:readf32();
+            values[i] = datatypes.NumberRange.Deserialize(min, max);
         end
     end,
-    [RobloxPropertyType.Rect] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local step = len * 4;
-        local x0s = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
-        local y0s = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
-        local x1s = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
-        local y1s = ReadInterleavedf32(chunk.data, pos, len);
-        pos += step;
+    [RobloxPropertyType.Rect] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local x0s = ReadInterleavedf32(stream, len);
+        local y0s = ReadInterleavedf32(stream, len);
+        local x1s = ReadInterleavedf32(stream, len);
+        local y1s = ReadInterleavedf32(stream, len);
         for i = 1, len do
-            values[i] = { x0s[i], y0s[i], x1s[i], y1s[i] };
+            values[i] = datatypes.Rect.Deserialize(x0s[i], y0s[i], x1s[i], y1s[i]);
         end
     end,
-    [RobloxPropertyType.PhysicalProperties] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.PhysicalProperties] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            local exists = buffer.readu8(data, pos) ~= 0;
-            pos += 1;
+            local exists = stream:readu8() ~= 0;
             local value = nil;
             if (exists) then
-                local density = buffer.readf32(data, pos);
-                pos += 4;
-                local friction = buffer.readf32(data, pos);
-                pos += 4;
-                local elasticity = buffer.readf32(data, pos);
-                pos += 4;
-                local friction_weight = buffer.readf32(data, pos);
-                pos += 4;
-                local elasticity_weight = buffer.readf32(data, pos);
-                pos += 4;
-                value = {
-                    Density = density,
-                    Friction = friction,
-                    Elasticity = elasticity,
-                    FrictionWeight = friction_weight,
-                    ElasticityWeight = elasticity_weight,
-                };
+                local density = stream:readf32();
+                local friction = stream:readf32();
+                local elasticity = stream:readf32();
+                local friction_weight = stream:readf32();
+                local elasticity_weight = stream:readf32();
+                value = datatypes.PhysicalProperties.Deserialize(
+                    density,
+                    friction,
+                    elasticity,
+                    friction_weight,
+                    elasticity_weight
+                );
             end
             values[i] = value;
         end
     end,
-    [RobloxPropertyType.Color3uint8] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local twice = (len * 2);
+    [RobloxPropertyType.Color3uint8] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 0, len - 1 do
-            local r = buffer.readu8(chunk.data, pos + i);
-            local g = buffer.readu8(chunk.data, pos + len + i);
-            local b = buffer.readu8(chunk.data, pos + twice + i);
-            values[i + 1] = { r, g, b };
+            local r = stream:readu8();
+            local g = stream:readu8();
+            local b = stream:readu8();
+            values[i + 1] = datatypes.Color3.Deserialize(r, g, b, true);
         end
     end,
-    [RobloxPropertyType.Int64] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local list = ReadInterleavedi64(chunk.data, pos, len);
+    [RobloxPropertyType.Int64] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local list = ReadInterleavedi64(stream, len);
         for i = 1, len do
             values[i] = list[i];
         end
     end,
-    [RobloxPropertyType.SharedString] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local keys = ReadInterleavedu32(chunk.data, pos, len);
+    [RobloxPropertyType.SharedString] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local keys = ReadInterleavedu32(stream, len);
         for i = 1, len do
             values[i] = keys[i];
         end
     end,
-    [RobloxPropertyType.ProtectedString] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.ProtectedString] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            local size = buffer.readu32(data, pos);
-            pos += 4;
-            local value = buffer.create(size);
-            buffer.copy(value, 0, data, pos, size);
-            values[i] = value;
+            local size = stream:readu32();
+            values[i] = stream:readbuffer(size);
         end
     end,
-    [RobloxPropertyType.OptionalCFrame] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        cframeDeserializer(RobloxPropertyType.OptionalCFrame, values, len, chunk, pos);
+    [RobloxPropertyType.OptionalCFrame] = function(values: {any}, property_name: string, stream: BufferStream)
+        cframeDeserializer(RobloxPropertyType.OptionalCFrame, values, property_name, stream);
     end,
-    [RobloxPropertyType.UniqueId] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local ids = ReadInterleaved(chunk.data, pos, len, 16, function(b: buffer)
+    [RobloxPropertyType.UniqueId] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local ids = ReadInterleaved(stream:readbuffer(len * 16), 0, len, 16, function(b: buffer)
             local random = buffer.create(8);
-            buffer.copy(random, 0, b, 8, 8);
+            buffer.copy(random, 0, b, 0, 8);
             return {
-                index = buffer.readu32(b, 0),
-                time = buffer.readu32(b, 4),
+                index = buffer.readu32(b, 8),
+                time = buffer.readu32(b, 12),
                 random = random,
             }
         end)
@@ -798,49 +1297,51 @@ local PropertyDeserializerMap = {
             values[i] = ids[i];
         end
     end,
-    [RobloxPropertyType.FontFace] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local data = chunk.data;
+    [RobloxPropertyType.Font] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
         for i = 1, len do
-            local family_size = buffer.readu32(data, pos);
-            pos += 4;
-            local family = buffer.readstring(data, pos, family_size);
-            pos += family_size;
-            local weight = buffer.readu16(data, pos);
-            pos += 2;
-            local style = buffer.readu8(data, pos);
-            pos += 1;
-            local cache_size = buffer.readu32(data, pos);
-            pos += 4;
-            local cache_id = buffer.readstring(data, pos, cache_size);
-            pos += cache_size;
-            values[i] = { Family = family, Weight = weight, Style = style, CacheId = cache_id };
+            local family = stream:readstring();
+            local weight = stream:readu16();
+            local style = stream:readu8();
+            local cache_id = stream:readstring();
+            values[i] = datatypes.Font.Deserialize(family, weight, style, cache_id);
         end
     end,
-    [RobloxPropertyType.SecurityCapabilities] = function(values: {any}, len: number, chunk: ChunkInfo, pos: number)
-        local capabilities = ReadInterleavedu64(chunk.data, pos, len);
+    [RobloxPropertyType.SecurityCapabilities] = function(values: {any}, property_name: string, stream: BufferStream)
+        local len = #values;
+        local capabilities = ReadInterleavedu64(stream, len);
         for i = 1, len do
             values[i] = capabilities[i];
         end
     end,
 }
 
+local BLANK_PROPERTY = {
+    type = RobloxPropertyType.Unknown,
+    value = nil,
+};
+
+local function getDefaultEnum(enum: datatypes.Enum, member: any): datatypes.EnumItem?
+    local default = member.Default;
+    if (not default) then
+        return nil;
+    end
+    return enum[default];
+end
+
 local DeserializerMap = {
     [BinaryChunkType.INST] = function(document: Document, chunk: ChunkInfo)
-        local pos = 0;
-        local data = chunk.data;
+        local chunk_stream = Stream.fromBuffer(chunk.data);
+        local class_index = chunk_stream:readu32() + 1;
+        local class_name = chunk_stream:readstring();
+        local is_service = chunk_stream:readu8() ~= 0;
+        local instances_len = chunk_stream:readu32();
 
-        local class_index = buffer.readu32(data, pos);
-        pos += 4;
-        local class_name_len = buffer.readu32(data, pos);
-        pos += 4;
-        local class_name = buffer.readstring(data, pos, class_name_len);
-        pos += class_name_len;
-        local is_service = buffer.readu8(data, pos) ~= 0;
-        pos += 1;
-        local instances_len = buffer.readu32(data, pos);
-        pos += 4;
+        if (class_index < 1 or class_index > document.info.instances) then
+            error(`index {class_index - 1} out of bounds {document.info.classes - 1}`);
+        end
 
-        local instances = ReadInstances(data, pos, instances_len);
+        local instances = ReadInstances(chunk_stream, instances_len);
 
         for i = 1, instances_len do
             local id = instances[i];
@@ -851,9 +1352,12 @@ local DeserializerMap = {
                 properties = {},
             };
             if (is_service) then
-                pos += 1;
+                chunk_stream:readu8()
             end
-            document.instances[id  + 1] = inst;
+            if (id < 1 or id > document.info.instances) then
+                error(`index {id - 1} out of bounds {document.info.instances - 1}`);
+            end
+            document.instances[id] = inst;
         end
 
         document.classes[class_index] = {
@@ -866,85 +1370,136 @@ local DeserializerMap = {
         return false;
     end,
     [BinaryChunkType.PROP] = function(document: Document, chunk: ChunkInfo)
-        local pos = 0;
-        local data = chunk.data;
-        local class_index = buffer.readu32(data, pos);
-        pos += 4;
-        local name_len = buffer.readu32(data, pos);
-        pos += 4;
-        local name = buffer.readstring(data, pos, name_len);
-        pos += name_len;
+        local chunk_stream = Stream.fromBuffer(chunk.data);
+        local class_index = chunk_stream:readu32() + 1;
+        local property_name = chunk_stream:readstring();
 
+        if (class_index < 1 or class_index > document.info.instances) then
+            error(`index {class_index - 1} out of bounds {document.info.classes - 1}`);
+        end
         local class = document.classes[class_index];
-        assert(class, "Deserializer property class not found: " .. name);
+        assert(class, `Deserializer property class not found: {property_name}`);
 
-        local type_byte = buffer.readu8(data, pos);
-        pos += 1;
+        local type_byte = chunk_stream:readu8();
 
         local length = #class.instances;
-        local values = table.create(length);
+        local values = table.create(length, BLANK_PROPERTY);
 
         local deserializer = PropertyDeserializerMap[type_byte];
-        assert(deserializer, "Unsupported Property type: " .. (getPropertyTypeName(type_byte) or "?"));
+        assert(deserializer, `Unsupported Property type: {getPropertyTypeName(type_byte)}`);
 
-        deserializer(values, length, chunk, pos);
+        deserializer(values, property_name, chunk_stream);
+
+        if (type_byte == roblox.PropertyTypes.Enum) then
+            local class_api = reflection:GetClass(class.name);
+            if (class_api) then
+                local enum_member = nil;
+                for _, member in class_api.Members do
+                    if (member.MemberType ~= "Property") then
+                        continue;
+                    end
+                    if (member.Name ~= property_name or member.ValueType.Category ~= "Enum") then
+                        continue;
+                    end
+                    enum_member = member;
+                    break
+                end
+                if (enum_member) then
+                    local enum = datatypes.Enums.DataType[enum_member.Name];
+                    if (enum) then
+                        local default = getDefaultEnum(enum, enum_member);
+                        local items = enum:GetEnumItems();
+                        for i, value in values do
+                            values[i] = assert(items[value] or default, `Invalid EnumArrayId: {value} ({enum_member.Name}) for {class.name}.{property_name} [{enum_member.Default}]`);
+                        end
+                    end
+                end
+            end
+        end
 
         for i = 1, length do
             local id = class.instances[i];
-            local instance = document.instances[id + 1];
+            local instance = document.instances[id];
             local value = values[i];
-            instance.properties[name] = value;
+            instance.properties[property_name] = {
+                type = type_byte,
+                value = value,
+            };
         end
 
         return false;
     end,
+    [BinaryChunkType.META] = function(document: Document, chunk: ChunkInfo)
+        local chunk_stream = Stream.fromBuffer(chunk.data);
+        for i = 1, chunk_stream:readu32() do
+            local key = chunk_stream:readbuffer(chunk_stream:readu32());
+            local value = chunk_stream:readbuffer(chunk_stream:readu32());
+            document.metadata[buffer.tostring(key)] = buffer.tostring(value);
+        end
+        return false;
+    end,
     [BinaryChunkType.PRNT] = function(document: Document, chunk: ChunkInfo)
-        local pos = 0;
-        local data = chunk.data;
+        local chunk_stream = Stream.fromBuffer(chunk.data);
 
-        local format = buffer.readu8(data, pos);
-        pos += 1;
-        local count = buffer.readu32(data, pos);
-        pos += 4;
+        local format = chunk_stream:readu8();
+        local count = chunk_stream:readu32();
 
         if (format ~= 0) then
-            error("Unsupported PRNT format: " .. format);
+            error(`Unsupported PRNT format: {format}`);
         end
 
-        local step = count * 4;
-        local childs = ReadInstances(data, pos, count);
-        pos += step;
-        local parents = ReadInstances(data, pos, count);
-        pos += step;
+        local childs = ReadInstances(chunk_stream, count);
+        local parents = ReadInstances(chunk_stream, count);
 
         for i = 1, count do
             local child_id = childs[i];
             local parent_id = parents[i];
-            if (parent_id >= 0) then
-                document.instances[child_id + 1].parent = parent_id;
+            if (parent_id < 0 or parent_id > document.info.instances) then
+                error(`Invalid parent id, {parent_id}/{document.info.instances}, chunk#{chunk.id}[PRNT]`);
+            end
+            if (child_id < 0 or child_id > document.info.instances) then
+                error(`Invalid child id, {child_id}/{document.info.instances}, chunk#{chunk.id}[PRNT]`);
+            end
+            if (parent_id >= 1) then
+                document.instances[child_id].parent = parent_id;
+            elseif (parent_id < 0) then
+                error(`Invalid parent id: {parent_id - 1}`);
             end
         end
 
         return false;
     end,
+    [BinaryChunkType.SIGN] = function(document: Document, chunk: ChunkInfo)
+        local chunk_stream = Stream.fromBuffer(chunk.data);
+        local signs_len = chunk_stream:readu32();
+
+        local signs: {Signature} = table.create(signs_len);
+
+        for i = 1, signs_len do
+            local type_idx = chunk_stream:readi32();
+            local key = chunk_stream:readbuffer(8);
+            local value = chunk_stream:readstring();
+            signs[i] = {
+                PublicKey = key,
+                Type = if (type_idx == 0) then "Ed25519" else error("Unknown"),
+                Value = value,
+            };
+        end
+
+        return false;
+    end,
     [BinaryChunkType.SSTR] = function(document: Document, chunk: ChunkInfo)
-        local pos = 0;
-        local data = chunk.data;
-        local format = buffer.readi32(data, pos);
-        pos += 4;
-        local hash_len = buffer.readu32(data, pos);
-        pos += 4;
+        local chunk_stream = Stream.fromBuffer(chunk.data);
+        local format = chunk_stream:readi32();
+        local hash_len = chunk_stream:readu32();
 
         if (format ~= 0) then
             error("Bad SharedString format");
         end
 
         for i = 1, hash_len do
-            pos += 16;
-            local data_len = buffer.readu32(data, pos);
-            pos += 4;
-            local key = buffer.readstring(data, pos, data_len);
-            pos += data_len;
+            chunk_stream:move(16);
+            local key = chunk_stream:readstring()
             local hash = crypto.hash.blake2.b128(key);
             local hash_base64 = serde.base64.encode(hash);
             local lookup = {
@@ -963,19 +1518,18 @@ local DeserializerMap = {
 };
 
 local function deserialize(slice: buffer, slice_pos: number): Document
-    local pos = slice_pos;
-    if (buffer.len(slice) - pos < 18) then
-        error("Bad Chunk");
+    local slice_len = buffer.len(slice);
+    if (slice_len - slice_pos < 18) then
+        error("Bad slice length");
     end
 
-    local version = buffer.readu16(slice, pos);
-    pos += 2;
-    local classes = buffer.readu32(slice, pos);
-    pos += 4;
-    local instances = buffer.readu32(slice, pos);
-    pos += 4;
-    local reserved = 0; -- 8 bytes
-    pos += 8;
+    local stream = Stream.fromBuffer(slice);
+    stream:move(slice_pos);
+
+    local version = stream:readu16();
+    local classes = stream:readu32();
+    local instances = stream:readu32();
+    local reserved = stream:readbuffer(8); -- 8 bytes
 
     local document: Document = {
         info = {
@@ -991,15 +1545,20 @@ local function deserialize(slice: buffer, slice_pos: number): Document
         signatures = nil,
     }
 
+    local chunk_id = 0;
     while (true) do
-        local chunk, new_pos = readChunk(slice, pos);
+        chunk_id += 1;
+        local chunk = readChunk(stream);
 
-        pos = new_pos;
+        chunk.id = chunk_id;
 
         local deserializer = DeserializerMap[chunk.type];
-        assert(deserializer, "Unsupported chunk type: ".. (getBinaryChunkTypeName(chunk.type) or "?"))
+        assert(deserializer, "Unsupported chunk type: ".. getBinaryChunkTypeName(chunk.type));
         if (deserializer(document, chunk)) then
             break;
+        end
+        if (slice_len <= stream.position) then
+            error("EOF, expected more chunks.");
         end
     end
 
@@ -1012,18 +1571,96 @@ if zune.testing.running then
 
     local test = testing.test
 
-    test("deserialize baseplate 566", function()
-        local buf = fs.readFile("./rbx-test-files/places/baseplate-566/binary.rbxl", true);
-        assert(buffer.readstring(buf, 0, 14) == BinaryMagicHeader, "Mismatch")
-        local start = os.clock();
-        local doc = deserialize(buf, 14);
-        print(doc)
-        local endt = os.clock();
-        print(`Completed in {endt - start} seconds`)
-    end)
+    local function similarProperties(
+        prop1: {[string]: Property},
+        prop2: {[string]: Property}
+    )
+        for name, p1 in prop1 do
+            local p2 = prop2[name];
+            if (p1.type ~= p2.type) then
+                return false, `{getPropertyTypeName(p1.type)} != {getPropertyTypeName(p2.type)}`;
+            end
+            if (p1.type == RobloxPropertyType.UniqueId) then
+                continue;
+            end
+            if (type(p1.value) ~= type(p2.value)) then
+                return false, "Type mismatch";
+            end
+            if (type(p1.value) == "buffer") then
+                continue;
+            end
+            if (p1.value ~= p2.value) then
+                if p2.value ~= p2.value and p1.value ~= p1.value then
+                    continue;
+                end
+                return false, `{tostring(p1.value)} !<{name} = {getPropertyTypeName(p1.type)}>= {tostring(p2.value)}`;
+            end
+        end
+        return true, "";
+    end
+
+    local function isSimilar(instances1: {Instance}, instances2: {Instance})
+        if (#instances1 ~= #instances2) then
+            return false;
+        end
+        for i = 1, #instances1 do
+            local inst1 = instances1[i];
+            local inst2 = instances2[i];
+            if (inst1.className ~= inst2.className) then
+                return false, i;
+            end
+            if (inst1.isService ~= inst2.isService) then
+                return false, i;
+            end
+            if (inst1.referent ~= inst2.referent) then
+                return false, i;
+            end
+            if (inst1.parent ~= inst2.parent) then
+                return false, i;
+            end
+            local ok, msg = similarProperties(inst1.properties, inst2.properties);
+            if (not ok) then
+                return false, `{i}: {msg}`;
+            end
+        end
+        return true;
+    end
+
+    local function serializeDeserializeTest(name: string, path: string)
+        test(name, function()
+            local buf = fs.readFile(path, true);
+            assert(buffer.readstring(buf, 0, 14) == BinaryMagicHeader, "Mismatch")
+            local doc = deserialize(buf, 14);
+            local content = serialize(doc);
+            assert(buffer.readstring(content, 0, 14) == BinaryMagicHeader, "Mismatch")
+            local doc2 = deserialize(content, 14);
+            assert(isSimilar(doc.instances, doc2.instances));
+        end)
+    end
+
+    local RBX = "./rbx-test-files";
+
+    serializeDeserializeTest(
+        "places/all instances 415", `{RBX}/places/all-instances-415/binary.rbxl`
+    )
+    serializeDeserializeTest(
+        "places/all instances 413", `{RBX}/places/baseplate-413/binary.rbxl`
+    )
+    serializeDeserializeTest(
+        "places/all instances 454", `{RBX}/places/baseplate-454/binary.rbxl`
+    )
+    serializeDeserializeTest(
+        "places/all instances 566", `{RBX}/places/baseplate-566/binary.rbxl`
+    )
+    for _, sample in fs.readDir(`{RBX}/models/`) do
+        serializeDeserializeTest(
+            `models/{sample}`, `{RBX}/models/{sample}/binary.rbxm`
+        )
+    end
 end
 
 return {
+    header = BinaryMagicHeader;
+    serialize = serialize;
     deserialize = deserialize;
-    serialize = nil;
 };
