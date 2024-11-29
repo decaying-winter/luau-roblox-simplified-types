@@ -5,7 +5,7 @@ A luau library to manipulate Roblox instances from place/model files, powered by
 Supported:
 - Binary (.rbxl, .rbxm)
     - [x] deserialization
-    - [ ] serialization
+    - [x] serialization
 - XML (.rbxlx, .rbxmx)
     - [ ] deserialization
     - [ ] serialization

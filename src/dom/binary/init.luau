@@ -804,7 +804,6 @@ local function readChunk(stream: BufferStream): ChunkInfo
         local byte = stream:readu8()
         stream:move(-1);
         if (byte == 0x58 or byte == 0x78) then
-            print("zlib");
             data = serde.zlib.decompress(stream:readbuffer(compressed_size));
         elseif (buffer.readstring(stream.buffer, stream.position + 1, 3) == "\xB5\x2F\xFD") then
             print("zstd ");
