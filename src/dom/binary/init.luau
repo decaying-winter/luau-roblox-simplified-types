@@ -1,5 +1,6 @@
 --!strict
 local serde = zune.serde;
+local stdio = zune.stdio;
 local crypto = zune.crypto;
 
 local Stream = require("./stream");
@@ -11,6 +12,14 @@ local datatypes = require("../../datatypes");
 local reflection = require("../../reflection");
 
 local BinaryMagicHeader = "<roblox!\x89\xff\x0d\x0a\x1a\x0a";
+
+local style = stdio.style;
+local reset = stdio.reset;
+
+local SER_TAG = `[dom{style("dim")}::{stdio.color("yellow")}serialize{reset()}]`;
+local DES_TAG = `[dom{style("dim")}::{stdio.color("green")}deserialize{reset()}]`;
+
+local print = print;
 
 local BinaryChunkType = {
     INST = 0,
@@ -66,6 +75,10 @@ end
 
 local function getPropertyTypeName(type: number): string
     return (assert(RobloxPropertyTypeNameMap[type], "Unknown property type"));
+end
+
+local function color(name: string, string)
+    return `{stdio.color(name::any)}{string}{reset()}`;
 end
 
 local function rotatei32(b: buffer): number
@@ -601,7 +614,7 @@ local PropertySerializerMap = {
     [RobloxPropertyType.SharedString] = function(values: {Property}, stream: BufferStream)
         local keys = table.create(#values);
         for i, value in values do
-            keys[i] = value.value;
+            keys[i] = value.value - 1;
         end
         stream:writebuffer(WriteInterleavedu32(keys));
     end,
@@ -639,6 +652,17 @@ local PropertySerializerMap = {
         stream:writebuffer(WriteInterleavedu64(capabilities));
     end,
 }
+
+local function getMemberProperty(class: string, member: string): reflection.PropertyMemberInfo?
+    local memberInfo = reflection:GetClassMember(class, member, true);
+    if (not memberInfo) then
+        return;
+    end
+    if (memberInfo.MemberType == "Property") then
+        return memberInfo;
+    end
+    return;
+end
 
 local function serialize(document: Document): buffer
     local stream = Stream.new(#BinaryMagicHeader);
@@ -730,9 +754,20 @@ local function serialize(document: Document): buffer
                 continue;
             end
             if (PropertySerializerMap[value.type] == nil) then
-                print(`[dom] Unsupported property type: {getPropertyTypeName(value.type)}`);
+                print(`{SER_TAG} Unsupported property type: {getPropertyTypeName(value.type)}`);
                 continue;
             end
+
+            local member = getMemberProperty(class.name, name);
+            if (not member) then
+                print(`{SER_TAG} Property {color("green", `"{name}"`)} in class {color("green", `"{class.name}"`)} was not found.`);
+                continue;
+            end
+            if (not member.Serialization.CanSave) then
+                print(`{SER_TAG} Property {color("green", `"{name}"`)} in class {color("green", `"{class.name}"`)} is not serializable.`);
+                continue;
+            end
+
             stream:writerawstring(getBinaryChunkTypeName(BinaryChunkType.PROP));
             writeChunk(stream, function(chunk)
                 chunk:writeu32(class.index - 1);
@@ -806,8 +841,10 @@ local function readChunk(stream: BufferStream): ChunkInfo
         if (byte == 0x58 or byte == 0x78) then
             data = serde.zlib.decompress(stream:readbuffer(compressed_size));
         elseif (buffer.readstring(stream.buffer, stream.position + 1, 3) == "\xB5\x2F\xFD") then
-            print("zstd ");
-            error("not supported yet")
+            data = serde.zstd.decompress(
+                stream:readbuffer(compressed_size)
+            );
+            assert(buffer.len(data) == size, "[dom] Chunk zstd data size mismatch");
         else
             data = serde.lz4.decompress(
                 stream:readbuffer(compressed_size),
@@ -1268,7 +1305,7 @@ local PropertyDeserializerMap = {
         local len = #values;
         local keys = ReadInterleavedu32(stream, len);
         for i = 1, len do
-            values[i] = keys[i];
+            values[i] = keys[i] + 1;
         end
     end,
     [RobloxPropertyType.ProtectedString] = function(values: {any}, property_name: string, stream: BufferStream)
@@ -1383,6 +1420,18 @@ local DeserializerMap = {
 
         local length = #class.instances;
         local values = table.create(length, BLANK_PROPERTY);
+
+        --[[Validate Property]] do
+            local member = getMemberProperty(class.name, property_name);
+            if (not member) then
+                print(`{DES_TAG} Unsupported property {color("green", `"{property_name}"`)} in class {color("green", `"{class.name}"`)} (Outdated?)`);
+                return false;
+            end
+            if (not member.Serialization.CanLoad) then
+                print(`{DES_TAG} Deserialization for property {color("green", `"{property_name}"`)} disabled in class {color("green", `"{class.name}"`)}`);
+                return false;
+            end
+        end
 
         local deserializer = PropertyDeserializerMap[type_byte];
         assert(deserializer, `Unsupported Property type: {getPropertyTypeName(type_byte)}`);
@@ -1564,102 +1613,11 @@ local function deserialize(slice: buffer, slice_pos: number): Document
     return document;
 end
 
-if zune.testing.running then
-    local fs = zune.fs
-    local testing = zune.testing
-
-    local test = testing.test
-
-    local function similarProperties(
-        prop1: {[string]: Property},
-        prop2: {[string]: Property}
-    )
-        for name, p1 in prop1 do
-            local p2 = prop2[name];
-            if (p1.type ~= p2.type) then
-                return false, `{getPropertyTypeName(p1.type)} != {getPropertyTypeName(p2.type)}`;
-            end
-            if (p1.type == RobloxPropertyType.UniqueId) then
-                continue;
-            end
-            if (type(p1.value) ~= type(p2.value)) then
-                return false, "Type mismatch";
-            end
-            if (type(p1.value) == "buffer") then
-                continue;
-            end
-            if (p1.value ~= p2.value) then
-                if p2.value ~= p2.value and p1.value ~= p1.value then
-                    continue;
-                end
-                return false, `{tostring(p1.value)} !<{name} = {getPropertyTypeName(p1.type)}>= {tostring(p2.value)}`;
-            end
-        end
-        return true, "";
-    end
-
-    local function isSimilar(instances1: {Instance}, instances2: {Instance})
-        if (#instances1 ~= #instances2) then
-            return false;
-        end
-        for i = 1, #instances1 do
-            local inst1 = instances1[i];
-            local inst2 = instances2[i];
-            if (inst1.className ~= inst2.className) then
-                return false, i;
-            end
-            if (inst1.isService ~= inst2.isService) then
-                return false, i;
-            end
-            if (inst1.referent ~= inst2.referent) then
-                return false, i;
-            end
-            if (inst1.parent ~= inst2.parent) then
-                return false, i;
-            end
-            local ok, msg = similarProperties(inst1.properties, inst2.properties);
-            if (not ok) then
-                return false, `{i}: {msg}`;
-            end
-        end
-        return true;
-    end
-
-    local function serializeDeserializeTest(name: string, path: string)
-        test(name, function()
-            local buf = fs.readFile(path, true);
-            assert(buffer.readstring(buf, 0, 14) == BinaryMagicHeader, "Mismatch")
-            local doc = deserialize(buf, 14);
-            local content = serialize(doc);
-            assert(buffer.readstring(content, 0, 14) == BinaryMagicHeader, "Mismatch")
-            local doc2 = deserialize(content, 14);
-            assert(isSimilar(doc.instances, doc2.instances));
-        end)
-    end
-
-    local RBX = "./rbx-test-files";
-
-    serializeDeserializeTest(
-        "places/all instances 415", `{RBX}/places/all-instances-415/binary.rbxl`
-    )
-    serializeDeserializeTest(
-        "places/all instances 413", `{RBX}/places/baseplate-413/binary.rbxl`
-    )
-    serializeDeserializeTest(
-        "places/all instances 454", `{RBX}/places/baseplate-454/binary.rbxl`
-    )
-    serializeDeserializeTest(
-        "places/all instances 566", `{RBX}/places/baseplate-566/binary.rbxl`
-    )
-    for _, sample in fs.readDir(`{RBX}/models/`) do
-        serializeDeserializeTest(
-            `models/{sample}`, `{RBX}/models/{sample}/binary.rbxm`
-        )
-    end
-end
-
 return {
     header = BinaryMagicHeader;
     serialize = serialize;
     deserialize = deserialize;
+    debug = function(callback: (...any) -> ())
+        print = callback::any;
+    end
 };

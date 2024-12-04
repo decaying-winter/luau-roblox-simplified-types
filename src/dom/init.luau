@@ -2,9 +2,17 @@
 local roblox = require("./roblox");
 local binary = require("./binary");
 
+export type DOM = roblox.Document;
+export type DOMInfo = roblox.DocumentInfo;
+export type DOMClass = roblox.Class;
+export type DOMInstance = roblox.Instance;
+export type DOMProperty = roblox.Property;
+
 local BINARY_HEADER_LEN = #binary.header;
 
 local dom = {};
+
+dom.roblox = roblox;
 
 function dom.deserialize(data: string | buffer): roblox.Document
     if (type(data) == "string") then
@@ -24,11 +32,10 @@ function dom.deserialize(data: string | buffer): roblox.Document
     end
 end
 
-function dom.serialize(document: roblox.Document, format: ("XML" | "BINARY")?): string
+function dom.serialize(document: roblox.Document, format: ("XML" | "BINARY")?): buffer
     format = format or "BINARY";
     if (format == "BINARY") then
-        local buf = binary.serialize(document);
-        return buffer.tostring(buf);
+        return binary.serialize(document);
     else
         error("Not implemented");
     end

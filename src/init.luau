@@ -1,4 +1,5 @@
 local dom = require("./dom");
+local manager = require("./core/manager");
 local reflection = require("./reflection");
 
 local module = {};
@@ -6,20 +7,26 @@ local module = {};
 module.dom = dom;
 module.reflection = reflection;
 
-function module.deserializePlace(contents: string)
-    error("Not implemented");
+function module.deserializePlace(contents: string | buffer)
+    local content = if (type(contents) == "string") then buffer.fromstring(contents) else contents;
+    local docs = dom.deserialize(content);
+    return manager.placeFromDom(docs);
 end
 
-function module.deserializeModel(contents: string)
-    error("Not implemented");
+function module.deserializeModel(contents: string | buffer)
+    local content = if (type(contents) == "string") then buffer.fromstring(contents) else contents;
+    local docs = dom.deserialize(content);
+    return manager.modelFromDOM(docs);
 end
 
-function module.serializePlace(dataModel: string, xml: boolean?): string
-    error("Not implemented");
+function module.serializePlace(dataModel: any, xml: boolean?): buffer
+    local docs = manager.domFromPlace(dataModel);
+    return dom.serialize(docs, if (xml) then "XML" else "BINARY");
 end
 
-function module.serializeModel(instances: {any}, xml: boolean?): string
-    error("Not implemented");
+function module.serializeModel(instances: {any}, xml: boolean?): buffer
+    local docs = manager.domFromModel(instances);
+    return dom.serialize(docs, if (xml) then "XML" else "BINARY");
 end
 
 function module.getReflectionDatabase(): reflection.ReflectionDatabase

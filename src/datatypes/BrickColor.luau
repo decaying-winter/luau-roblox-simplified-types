@@ -275,7 +275,9 @@ end
 
 function BrickColor.new(...): BrickColor
     local count = select("#", ...);
-    if (count == 1) then
+    if (count == 0) then
+        return BrickColor.palette(1003);
+    elseif (count == 1) then
         local value = ...;
         if (Color3.Is(value)) then
             return BrickColor.palette(paletteSearch(value.R, value.G, value.B));

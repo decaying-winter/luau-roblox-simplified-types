@@ -3,7 +3,6 @@
 
 # Generated
 **/.cache
-**/generated
 
 # Vscode
 .vscode/

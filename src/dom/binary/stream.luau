@@ -21,7 +21,7 @@ end
 export type BufferStream = typeof(BufferStream.new(0));
 
 local function grow(current: number, minimum: number): number
-    local new = current;
+    local new = math.max(current, 4);
     while true do
         new += (new/2) // 1;
         if (new >= minimum) then
@@ -32,24 +32,38 @@ end
 
 function BufferStream.move(self: BufferStream, delta: number)
     self.position += delta;
+    if (self.position < 0) then
+        error("BufferStream position is negative");
+    end
+end
+
+function BufferStream.reset(self: BufferStream)
+    self.position = 0;
 end
 
 function BufferStream.couldRead(self: BufferStream, size: number)
     return self.position + size <= self.capacity;
 end
 
-function BufferStream.expandToSize(self: BufferStream, new_size: number)
-    if (new_size < self.capacity) then
+function BufferStream.expandToSizePrecise(self: BufferStream, new_size: number)
+    if (new_size <= self.capacity) then
         return;
     end
 
     local current_size = self.capacity;
-    local predicted_size = grow(current_size, new_size);
-    self.capacity = predicted_size;
+    self.capacity = new_size;
 
     local current = self.buffer;
-    self.buffer = buffer.create(predicted_size);
+    self.buffer = buffer.create(new_size);
     buffer.copy(self.buffer, 0, current, 0, current_size);
+end
+
+function BufferStream.expandToSize(self: BufferStream, new_size: number)
+    if (new_size <= self.capacity) then
+        return;
+    end
+    local predicted_size = grow(self.capacity, new_size);
+    self:expandToSizePrecise(predicted_size)
 end
 
 function BufferStream.trim(self: BufferStream)

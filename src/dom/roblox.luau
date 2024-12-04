@@ -1,11 +1,4 @@
 --!strict
-export type DocumentInfo = {
-    version: number,
-    classes: number,
-    instances: number,
-    reserved: buffer,
-};
-
 export type Class = {
     index: number,
     name: string,
@@ -36,6 +29,13 @@ export type SharedString = {
     Lookup: {[string]: string},
     Key: string,
 }
+
+export type DocumentInfo = {
+    version: number,
+    classes: number,
+    instances: number,
+    reserved: buffer,
+};
 
 export type Document = {
     info: DocumentInfo,
