@@ -61,6 +61,7 @@ function manager.placeFromDom(doc: dom.DOM): roblox.DataModel
     local instances = manager.instancesFromDOM(doc);
     for _, instance in instances do
         (instance::any)["@parent"] = datamodel;
+        table.insert(datamodel["@children"], instance);
     end
     return datamodel::any;
 end

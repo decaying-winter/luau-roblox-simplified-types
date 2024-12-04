@@ -36,6 +36,15 @@ function impl.method.FindFirstChild(self: any, name: string): any?
     return nil;
 end
 
+function impl.method.FindFirstChildOfClass(self: any, className: string): any?
+    for _, child in self["@children"] do
+        if (child["@class"] == className) then
+            return child;
+        end
+    end
+    return nil;
+end
+
 function impl.method.FindFirstAncestor(self: any, name: string): any?
     local parent = self["@parent"];
     while (parent) do

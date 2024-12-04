@@ -5,6 +5,7 @@ local reflection = require("./reflection");
 local module = {};
 
 module.dom = dom;
+module.manager = manager;
 module.reflection = reflection;
 
 function module.deserializePlace(contents: string | buffer)
