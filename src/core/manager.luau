@@ -26,7 +26,9 @@ function manager.instancesFromDOM(doc: dom.DOM): {roblox.Instance}
     for _, instance in doc.instances do
         local object = instances[instance.referent];
         if (instance.parent) then
-            (object::any)["@parent"] = instances[instance.parent];
+            local parent = instances[instance.parent];
+            (object::any)["@parent"] = parent;
+            table.insert((parent::any)["@children"], object);
             valid -= 1;
         end
     end
