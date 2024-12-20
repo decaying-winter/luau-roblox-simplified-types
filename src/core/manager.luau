@@ -1,18 +1,14 @@
 --!strict
+--!native
 local object = require("./object");
 local roblox = require("./types/roblox");
 
 local dom = require("../dom");
-local reflection = require("../reflection");
 
 local manager = {};
 
 function manager.instanceFromDOM(instance: dom.DOMInstance): roblox.Instance
-    local obj = object.raw(instance.className);
-    local object_properties = obj["@properties"];
-    for name, property in instance.properties do
-        object_properties[name] = property;
-    end
+    local obj = object.dom(instance);
     object.LoadDefaultProperties(obj, instance.className);
     return obj::any;
 end
@@ -27,13 +23,13 @@ function manager.instancesFromDOM(doc: dom.DOM): {roblox.Instance}
         local object = instances[instance.referent];
         if (instance.parent) then
             local parent = instances[instance.parent];
-            (object::any)["@parent"] = parent;
-            table.insert((parent::any)["@children"], object);
+            rawset(object::any, "@parent", parent);
+            table.insert(rawget(parent::any, "@children"), object);
             valid -= 1;
         end
     end
     for _, instance in instances do
-        for name, property in (instance::any)["@properties"] do
+        for name, property in (instance::any)["@instance"].properties do
             if (property.type == dom.roblox.PropertyTypes.Ref and property.value) then
                 property.value = instances[property.value];
             elseif (property.type == dom.roblox.PropertyTypes.SharedString and property.value) then
@@ -43,7 +39,7 @@ function manager.instancesFromDOM(doc: dom.DOM): {roblox.Instance}
     end
     local list = table.create(valid);
     for _, instance in instances do
-        if ((instance::any)["@parent"] == nil) then
+        if (rawget(instance::any, "@parent") == nil) then
             table.insert(list, instance);
         end
     end
@@ -56,13 +52,13 @@ end
 
 function manager.placeFromDom(doc: dom.DOM): roblox.DataModel
     local datamodel = object.raw("DataModel");
-    datamodel["@properties"]["Name"] = {
+    datamodel["@instance"].properties["Name"] = {
         value = "DataModel",
         type = dom.roblox.PropertyTypes.String,
     };
     local instances = manager.instancesFromDOM(doc);
     for _, instance in instances do
-        (instance::any)["@parent"] = datamodel;
+        rawset(instance::any, "@parent", datamodel);
         table.insert(datamodel["@children"], instance);
     end
     return datamodel::any;
@@ -80,69 +76,61 @@ function manager.domFromInstances(
         local map = {};
         local index = 1;
         for i, descendant in descendants do
-            local class_name = (descendant::any)["@class"];
+            local instance = (descendant::any)["@instance"];
+            local class_name = instance.className;
             local class: dom.DOMClass = map[class_name];
             if (not class) then
-                local api_class = reflection:GetClass(class_name);
-                local is_service =
-                    if (api_class and api_class.Tags) then
-                        table.find(api_class.Tags, "Service") ~= nil
-                    else
-                        false;
                 class = {
                     index = index;
                     name = class_name,
                     instances = {},
-                    isService = is_service,
+                    isService = instance.isService,
                 };
                 index += 1;
                 map[class_name] = class;
                 table.insert(classes, class::any);
             end
-            table.insert(class.instances, i);
-        end
-        for i, descendant in descendants do
-            local class = map[(descendant::any)["@class"]];
-            local dom_instance: dom.DOMInstance = {
-                referent = i,
-                className = (descendant::any)["@class"],
-                properties = {},
-                isService = class.isService,
-                parent = nil,
-            };
-            for name, property in (descendant::any)["@properties"] do
-                if (not property.serialize or not property.type) then
-                    continue;
-                end
-                local value = property.value;
-                if (property.type == dom.roblox.PropertyTypes.Ref and value) then
-                    value = descendants_map[value];
-                    if (not value) then
-                        error(`Reference to non-existent instance at '{descendant:GetFullName()}' (from another DataModel?)`);
-                    end
-                elseif (property.type == dom.roblox.PropertyTypes.SharedString) then
-                    if (type(property.value) ~= "table") then
-                        print("[rbx-manager] SharedString not set");
+            --[[Generate DOMInstance]] do
+                local dom_instance = table.clone(instance);
+                dom_instance.referent = i;
+                dom_instance.properties = table.clone(dom_instance.properties);
+                for name, property in instance.properties do
+                    if (not property.type) then
                         continue;
                     end
-                    if (not table.find(sharedstrings, property.value)) then
-                        assert(type(property.value) == "table", "Internal Error, SharedString not set");
-                        table.insert(sharedstrings, property.value);
+                    local value = property.value;
+                    if (property.type == dom.roblox.PropertyTypes.Ref and value) then
+                        value = descendants_map[value];
+                        if (not value) then
+                            error(`Reference to non-existent instance at '{descendant:GetFullName()}' (from another DataModel?)`);
+                        end
+                    elseif (property.type == dom.roblox.PropertyTypes.SharedString) then
+                        if (type(property.value) ~= "table") then
+                            print("[rbx-manager] SharedString not set");
+                            continue;
+                        end
+                        if (not table.find(sharedstrings, property.value)) then
+                            assert(type(property.value) == "table", "Internal Error, SharedString not set");
+                            table.insert(sharedstrings, property.value);
+                        end
+                        value = table.find(sharedstrings, property.value);
+                        assert(value, "SharedString not found");
+                    else
+                        continue;
                     end
-                    value = table.find(sharedstrings, property.value);
-                    assert(value, "SharedString not found");
+                    dom_instance.properties[name] = {
+                        value = value,
+                        type = property.type,
+                    };
                 end
-                dom_instance.properties[name] = {
-                    value = value,
-                    type = property.type,
-                };
+                local parent = rawget(descendant::any, "@parent");
+                if (parent and parent ~= ignoreParent) then
+                    dom_instance.parent = descendants_map[parent];
+                    assert(dom_instance.parent, "Parent instance not found (failed to reference)");
+                end
+                instances[i] = dom_instance;
             end
-            local parent = descendant.Parent;
-            if (parent and parent ~= ignoreParent) then
-                dom_instance.parent = descendants_map[parent];
-                assert(dom_instance.parent, "Parent instance not found (failed to reference)");
-            end
-            table.insert(instances, dom_instance);
+            table.insert(class.instances, i);
         end
     end
 
@@ -169,7 +157,8 @@ function manager.domFromPlace(datamodel: roblox.DataModel): dom.DOM
         local filtered = table.create(#descendants);
         local index = 1;
         for _, descendant in descendants do
-            if (descendant.Archivable) then
+            local properties = rawget(descendant::any, "@instance").properties;
+            if (properties["Archivable"] == nil or properties["Archivable"].value == true) then
                 table.insert(filtered, descendant);
                 descendants_map[descendant] = index;
                 index += 1;

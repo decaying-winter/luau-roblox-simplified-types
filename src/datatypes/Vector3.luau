@@ -11,8 +11,35 @@ end
 
 local CACHE = setmetatable({}, {__mode = "v"});
 
+-- TODO: use "vector" type instead of "any" when indexing .X, .Y, .Z doesn't cause an error
+local function getNan(vec: any): vector?
+    local res = vector.create(
+        if (vec.X ~= vec.X) then 1 else 0,
+        if (vec.Y ~= vec.Y) then 1 else 0,
+        if (vec.Z ~= vec.Z) then 1 else 0
+    );
+    if (vector.magnitude(res) > 0) then
+        return res;
+    end
+    return;
+end
+
+local NAN_HASH = {}
+for x = 0, 1 do
+    for y = 0, 1 do
+        for z = 0, 1 do
+            local vec = vector.create(x, y, z);
+            NAN_HASH[vec] = `{x}, {y}, {z}`;
+        end
+    end
+end
+
 local function newFromVec(vec: vector)
-    local hash = Helper.ValuesHash(vec);
+    local hash = vec;
+    local nan_vector = getNan(vec);
+    if (nan_vector) then
+        hash = NAN_HASH[nan_vector]::any;
+    end
     local cached = CACHE[hash];
     if (cached) then
         return cached;

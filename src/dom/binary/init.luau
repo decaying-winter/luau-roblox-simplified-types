@@ -1601,7 +1601,9 @@ local function deserialize(slice: buffer, slice_pos: number): Document
         chunk.id = chunk_id;
 
         local deserializer = DeserializerMap[chunk.type];
-        assert(deserializer, "Unsupported chunk type: ".. getBinaryChunkTypeName(chunk.type));
+        if (not deserializer) then
+            error("Unsupported chunk type: ".. getBinaryChunkTypeName(chunk.type));
+        end
         if (deserializer(document, chunk)) then
             break;
         end

@@ -11,7 +11,7 @@ impl.property.set = {};
 
 function impl.loader.IgnoreGuiInset(self: any, property: any?): ()
     if (property) then
-        local inset = self["@properties"]["ScreenInsets"];
+        local inset = self["@instance"].properties["ScreenInsets"];
         if (inset.value == Enum.ScreenInsets.CoreUISafeInsets) then
             inset.value = Enum.ScreenInsets.DeviceSafeInsets;
         end

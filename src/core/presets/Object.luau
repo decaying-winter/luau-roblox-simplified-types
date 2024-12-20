@@ -7,10 +7,11 @@ impl.property.set = {};
 
 function impl.method.IsA(self: any, className: string)
     local classMap = self["@internal_map"];
-    if (self["@class"] == className) then
+    local thisClassName = self["@instance"].className;
+    if (thisClassName == className) then
         return true;
     end
-    local class = classMap[self["@class"]];
+    local class = classMap[thisClassName];
     while (class.Superclass ~= "<<<ROOT>>") do
         if (class.Superclass == className) then
             return true;
@@ -24,10 +25,10 @@ function impl.method.IsA(self: any, className: string)
 end
 
 function impl.property.get.ClassName(self: any)
-    return self["@class"];
+    return self["@instance"].className;
 end
 function impl.property.get.className(self: any)
-    return self["@class"];
+    return self["@instance"].className;
 end
 
 return impl;

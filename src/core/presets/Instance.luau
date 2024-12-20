@@ -16,7 +16,7 @@ function impl.method.GetFullName(self: any): string
     if (not name) then
         return "";
     end
-    local parent = self["@parent"];
+    local parent = rawget(self, "@parent");
     if (not parent) then
         return name;
     end
@@ -38,7 +38,7 @@ end
 
 function impl.method.FindFirstChildOfClass(self: any, className: string): any?
     for _, child in self["@children"] do
-        if (child["@class"] == className) then
+        if (child["@instance"].className == className) then
             return child;
         end
     end
@@ -46,34 +46,34 @@ function impl.method.FindFirstChildOfClass(self: any, className: string): any?
 end
 
 function impl.method.FindFirstAncestor(self: any, name: string): any?
-    local parent = self["@parent"];
+    local parent = rawget(self, "@parent");
     while (parent) do
         if (parent.Name == name) then
             return parent;
         end
-        parent = parent["@parent"];
+        parent = rawget(parent, "@parent");
     end
     return;
 end
 
 function impl.method.FindFirstAncestorOfClass(self: any, className: string): any?
-    local parent = self["@parent"];
+    local parent = rawget(self, "@parent");
     while (parent) do
-        if (parent["@class"] == className) then
+        if (parent["@instance"].className == className) then
             return parent;
         end
-        parent = parent["@parent"];
+        parent = rawget(parent, "@parent");
     end
     return;
 end
 
 function impl.method.FindFirstAncestorWhichIsA(self: any, className: string): any?
-    local parent = self["@parent"];
+    local parent = rawget(self, "@parent");
     while (parent) do
         if (parent:IsA(className)) then
             return parent;
         end
-        parent = parent["@parent"];
+        parent = rawget(parent, "@parent");
     end
     return;
 end
@@ -91,23 +91,23 @@ function impl.method.GetDescendants(self: any): {any}
 end
 
 function impl.method.IsDescendantOf(self: any, ancestor: any): boolean
-    local parent = self["@parent"];
+    local parent = rawget(self, "@parent");
     while (parent) do
         if (parent == ancestor) then
             return true;
         end
-        parent = parent["@parent"];
+        parent = rawget(parent, "@parent");
     end
     return false;
 end
 
 function impl.method.IsAncestorOf(self: any, child: any): boolean
-    local parent = child["@parent"];
+    local parent = rawget(child, "@parent");
     while (parent) do
         if (parent == self) then
             return true;
         end
-        parent = child["@parent"];
+        parent = rawget(parent, "@parent");
     end
     return false;
 end
@@ -124,8 +124,9 @@ function impl.method.GetAttributes(self: any, name: string, value: any): any
 end
 
 function impl.method.Clone(self: any): any
-    local copy = impl.object.raw(self["@class"]);
-    copy["@properties"] = table.clone(self["@properties"]);
+    local copy = impl.object.raw(self["@instance"].className);
+    copy["@instance"] = table.clone(self["@instance"]);
+    copy["@instance"].properties = table.clone(self["@instance"].properties);
     for _, child in self["@children"] do
         table.insert(copy["@children"], child:Clone());
     end
@@ -135,34 +136,34 @@ end
 function impl.method.ClearAllChildren(self: any): ()
     local childs = self["@children"];
     for _, child in childs do
-        child["@parent"] = nil;
+        rawset(child, "@parent", nil);
     end
     table.clear(childs);
 end
 
 function impl.method.Destroy(self: any): ()
-    if (self["@parent"]) then
+    if (rawget(self, "@parent")) then
         self.Parent = nil;
     end
-    self["@destroyed"] = true;
+    rawset(self, "@destroyed", true);
 end
 
 function impl.property.get.Name(self: any)
-    local property = self["@properties"]["Name"];
+    local property = self["@instance"].properties["Name"];
     if (not property) then
         return nil;
     end
     return property.value;
 end
 function impl.property.get.Archivable(self: any)
-    local property = self["@properties"]["Archivable"];
+    local property = self["@instance"].properties["Archivable"];
     if (not property) then
         return nil;
     end
     return property.value;
 end
 function impl.property.get.className(self: any)
-    return self["@class"];
+    return self["@instance"].className;
 end
 
 return impl;

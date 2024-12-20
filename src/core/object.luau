@@ -22,14 +22,30 @@ local function blankFromClass(className: string): object
     if (not class) then
         error("Class not found");
     end
+    local is_service =
+        if (class.Tags) then
+            table.find(class.Tags, "Service") ~= nil
+        else
+            false;
     return setmetatable({
-        ["@properties"] = {}::{[string]: dom.DOMProperty},
+        ["@instance"] = {
+            className = className,
+            referent = -1,
+            properties = {},
+            parent = nil,
+            isService = is_service,
+        }::dom.DOMInstance,
         ["@children"] = {},
         ["@parent"] = nil::object?,
-        ["@class"] = className,
         ["@destroyed"] = false,
         ["@internal_map"] = PROXY_MAP,
     }, object);
+end
+
+function object.dom(dom: dom.DOMInstance): object
+    local blank = blankFromClass(dom.className);
+    blank["@instance"] = dom;
+    return blank;
 end
 
 function object.raw(className: string): object
@@ -123,11 +139,12 @@ local IGNORE_PROPERTIES_TYPE = {
 };
 
 local function loadDefaultProperties(self: object, className: string)
-    local properties = self["@properties"];
+    local instance = self["@instance"];
     local class = reflection:GetClass(className);
     if (not class) then
         error("Class not found");
     end
+    local properties = instance.properties;
     local post_load = {};
     for _, member in class.Members do
         if (member.MemberType ~= "Property") then
@@ -144,7 +161,6 @@ local function loadDefaultProperties(self: object, className: string)
             continue;
         end
         if (properties[member.Name]) then
-            (properties[member.Name]::any).serialize = member.Serialization.CanSave;
             continue;
         end
 
@@ -222,9 +238,6 @@ local function loadDefaultProperties(self: object, className: string)
         properties[member.Name] = {
             type = serializeId,
             value = default,
-            value_type = table.clone(member.ValueType),
-            serialize = member.Serialization.CanSave,
-            tags = if (member.Tags) then table.clone(member.Tags) else nil,
         };
     end
     if (class.Superclass ~= "<<<ROOT>>>") then
@@ -293,7 +306,7 @@ local function resolveGetProperty(self: object, className: string, key: string)
         assert(not self["@destroyed"], "Object is destroyed");
         return method;
     else
-        local raw = self["@properties"][key];
+        local raw = self["@instance"].properties[key];
         if (raw) then
             return raw.value;
         end
@@ -331,21 +344,21 @@ local function checkRecursion(self: object, parent: object?): boolean
             return true;
         end
         assert(search);
-        search = search["@parent"];
+        search = rawget(search::any, "@parent");
     end
     return false;
 end
 
 function object.__tostring(self: object)
-    return `<instance {tostring(if (self["@properties"]["Name"]) then self["@properties"]["Name"].value else self["@class"])}>`;
+    return `<instance {tostring(if (self["@instance"].properties["Name"]) then self["@instance"].properties["Name"].value else self["@class"])}>`;
 end
 
 function object.__index(self: object, key: string)
     assert(type(key) == "string", "Index must be string");
     if (key == "Parent") then
-        return self["@parent"];
+        return rawget(self::any, "@parent");
     end
-    local resolved = resolveGetProperty(self, self["@class"], key);
+    local resolved = resolveGetProperty(self, self["@instance"].className, key);
     if (not resolved) then
         if (self:IsA("Instance")) then
             resolved = self:FindFirstChild(key);
@@ -358,16 +371,17 @@ function object.__newindex(self: object, key: string, value: any)
     assert(type(key) == "string", "Index must be string");
     if (key == "Parent") then
         assert(value == nil or (isObject(value) and value:IsA("Instance")), "Parent must be an instance");
-        if (self["@parent"] == value) then
+        local parent = rawget(self::any, "@parent");
+        if (parent == value) then
             return;
         end
         if (checkRecursion(self, value)) then
             error("Parent cannot be a child of itself");
         end
-        if (self["@parent"]) then
-            local children_idx = table.find(self["@parent"]["@children"], self);
+        if (parent) then
+            local children_idx = table.find(parent["@children"], self);
             if (children_idx) then
-                table.remove(self["@parent"]["@children"], children_idx);
+                table.remove(parent["@children"], children_idx);
             else
                 error("Child not found in parent (Internal Error)");
             end
@@ -377,7 +391,7 @@ function object.__newindex(self: object, key: string, value: any)
         end
         rawset(self::any, "@parent", value);
     end
-    resolveSetProperty(self, self["@class"], key);
+    resolveSetProperty(self, self["@instance"].className, key);
 end
 
 return object;
