@@ -6,6 +6,7 @@ local crypto = zune.crypto;
 local Stream = require("./stream");
 
 local bit64 = require("../lib/bit64");
+local mem = require("../../polyfill/mem");
 
 local roblox = require("../roblox");
 local datatypes = require("../../datatypes");
@@ -82,43 +83,40 @@ local function color(name: string, string)
 end
 
 local function rotatei32(b: buffer): number
-    local be = buffer.fromstring(buffer.readstring(b, 0, 4):reverse());
-    local value = buffer.readi32(be, 0);
+    mem.reverse(b, 0, 4);
+    local value = buffer.readi32(b, 0);
     value = bit32.bxor(bit32.rshift(value, 1), -bit32.band(value, 1));
-    buffer.writeu32(be, 0, value);
-    return buffer.readi32(be, 0);
+    buffer.writeu32(b, 0, value);
+    return buffer.readi32(b, 0);
 end
 
 local function tou32(b: buffer): number
-    return buffer.readu32(
-        buffer.fromstring(buffer.readstring(b, 0, 4):reverse()),
-        0
-    );
+    mem.reverse(b, 0, 4);
+    return buffer.readu32(b, 0);
 end
 
 local function rotatei64(b: buffer): buffer
-    local be = buffer.fromstring(buffer.readstring(b, 0, 8):reverse());
-    local n = bit64.join(buffer.readi32(be, 0), buffer.readi32(be, 4));
+    mem.reverse(b, 0, 8);
+    local n = bit64.join(buffer.readi32(b, 0), buffer.readi32(b, 4));
 
     local value = bit64.bxor(bit64.rshift(n, 1), -(bit64.band(n, 1)));
 
     local high, low = bit64.split(value);
-    buffer.writei32(be, 0, high);
-    buffer.writei32(be, 4, low);
-    return be;
+    buffer.writei32(b, 0, high);
+    buffer.writei32(b, 4, low);
+    return b;
 end
 
 local function tou64(b: buffer): buffer
-    return buffer.fromstring(
-        buffer.readstring(b, 0, 8):reverse()
-    );
+    mem.reverse(b, 0, 8);
+    return b;
 end
 
 local function rotatef32(b: buffer): number
-    local be = buffer.fromstring(buffer.readstring(b, 0, 4):reverse());
-    local value = buffer.readu32(be, 0);
-    buffer.writeu32(be, 0, bit32.bor(bit32.rshift(value, 1), bit32.lshift(value, 31)));
-    return buffer.readf32(be, 0);
+    mem.reverse(b, 0, 4);
+    local value = buffer.readu32(b, 0);
+    buffer.writeu32(b, 0, bit32.bor(bit32.rshift(value, 1), bit32.lshift(value, 31)));
+    return buffer.readf32(b, 0);
 end
 
 local function ReadInterleaved<T>(b: buffer, offset: number, count: number, size: number, transform: (b: buffer) -> T): {T}
@@ -126,8 +124,8 @@ local function ReadInterleaved<T>(b: buffer, offset: number, count: number, size
         error("Too small");
     end
     local list = table.create(count);
+    local bytes = buffer.create(size);
     for i = 1, count do
-        local bytes = buffer.create(size);
         for j = 0, size - 1 do
             buffer.writeu8(bytes, j, buffer.readu8(b, offset + ((j * count) + i - 1)))
         end
@@ -139,16 +137,19 @@ end
 local function WriteInterleaved<T>(values: {T}, size: number, transform: (buffer, number, T) -> ()): buffer
     local count = #values;
     local b = buffer.create(count * size);
-    for i = 0, count - 1 do
+    local count_m1 = count - 1;
+    for i = 0, count_m1 do
         transform(b, i * size, values[i + 1]);
+    end
+    if (count == 1) then
+        return b;
     end
 
     local interleaved = buffer.create(count * size);
 
-    local simple_count = count - 1;
     local iter = 0;
     for i = 0, size - 1 do
-        for c = 0, simple_count do
+        for c = 0, count_m1 do
             buffer.writeu8(interleaved, iter, buffer.readu8(b, (c * size) + i))
             iter += 1;
         end
@@ -187,12 +188,12 @@ end
 
 local function writeRotatei32(b: buffer, offset: number, value: number): ()
     buffer.writei32(b, offset, bit32.bxor(bit32.lshift(value, 1), bit32.arshift(value, 31)));
-    buffer.writestring(b, offset, buffer.readstring(b, offset, 4):reverse(), 4);
+    mem.reverse(b, offset, 4);
 end
 
 local function writeu32(b: buffer, offset: number, value: number): ()
     buffer.writeu32(b, offset, value);
-    buffer.writestring(b, offset, buffer.readstring(b, offset, 4):reverse(), 4);
+    mem.reverse(b, offset, 4);
 end
 
 local function writeRotatei64(b: buffer, offset: number, value: buffer): ()
@@ -203,17 +204,17 @@ local function writeRotatei64(b: buffer, offset: number, value: buffer): ()
     buffer.writei32(b, 0, high);
     buffer.writei32(b, 4, low);
 
-    buffer.writestring(b, offset, buffer.readstring(b, offset, 8):reverse(), 4);
+    mem.reverse(b, offset, 8);
 end
 local function writeu64(b: buffer, offset: number, value: buffer): ()
-    buffer.writestring(b, offset, buffer.readstring(value, 0, 8):reverse(), 4);
+    mem.reverse(b, offset, 8);
 end
 
 local function writeRotatef32(b: buffer, offset: number, value: number): ()
     buffer.writef32(b, offset, value);
     local v = buffer.readu32(b, offset);
     buffer.writeu32(b, offset, bit32.bor(bit32.lshift(v, 1), bit32.rshift(v, 31)));
-    buffer.writestring(b, offset, buffer.readstring(b, offset, 4):reverse(), 4);
+    mem.reverse(b, offset, 4);
 end
 
 local function WriteInterleavedi32(values: {number}): buffer

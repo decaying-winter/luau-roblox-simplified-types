@@ -71,11 +71,11 @@ end
 
 Vector3.__index = function(self: Vector3, index: string): any
     if (type(index) == "string") then
-        if (index:lower() == "x") then
+        if (index == "x" or index == "X") then
             return self._internal.X;
-        elseif (index:lower() == "y") then
+        elseif (index == "y" or index == "Y") then
             return self._internal.Y;
-        elseif (index:lower() == "z") then
+        elseif (index == "z" or index == "Z") then
             return self._internal.Z;
         end
         return Vector3[index];

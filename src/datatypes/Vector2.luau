@@ -57,9 +57,9 @@ export type Vector2 = typeof(Vector2.new(0, 0));
 
 Vector2.__index = function(self: Vector2, index: string): any
     if (type(index) == "string") then
-        if (index:lower() == "x") then
+        if (index == "x" or index == "X") then
             return self._internal.X;
-        elseif (index:lower() == "y") then
+        elseif (index == "y" or index == "Y") then
             return self._internal.Y;
         end
         return Vector2[index];

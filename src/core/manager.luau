@@ -147,6 +147,7 @@ function manager.domFromInstances(
         sharedstrings = sharedstrings,
     };
 end
+
 function manager.domFromPlace(datamodel: roblox.DataModel): dom.DOM
     assert(
         object.is(datamodel) and datamodel:IsA("DataModel"),

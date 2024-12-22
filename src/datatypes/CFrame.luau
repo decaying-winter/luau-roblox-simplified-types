@@ -21,12 +21,13 @@ local function checkNumbers(...)
     return true;
 end
 
+local identity_posVector = Vector3.DataType.new(0, 0, 0);
 local identity_XVector = Vector3.DataType.new(1, 0, 0);
 local identity_YVector = Vector3.DataType.new(0, 1, 0);
 local identity_ZVector = Vector3.DataType.new(0, 0, 1);
 
 CFrame.identity = setmetatable({
-    X = 0, Y = 0, Z = 0,
+    Position = identity_posVector,
     RightVector = identity_XVector,
     UpVector = identity_YVector,
     LookVector = -identity_ZVector,
@@ -38,7 +39,7 @@ CFrame.identity = setmetatable({
 local CACHE = setmetatable({}, {__mode = "v"});
 
 CACHE[Helper.ValuesHash(
-    0, 0, 0,
+    identity_posVector,
     identity_XVector,
     identity_YVector,
     identity_ZVector
@@ -52,13 +53,14 @@ function CFrame.new(...): CFrame
         local position = ...;
         assert(Vector3.Is(position), "Invalid argument #1, expected Vector3");
         local x, y, z = position.X, position.Y, position.Z;
-        local hash = Helper.ValuesHash(x, y, z, identity_XVector, identity_YVector, identity_ZVector);
+        local posVector = Vector3.DataType.new(x, y, z);
+        local hash = Helper.ValuesHash(posVector, identity_XVector, identity_YVector, identity_ZVector);
         local cached = CACHE[hash];
         if (cached) then
             return cached;
         end
         local self = setmetatable({
-            X = x, Y = y, Z = z,
+            Position = posVector,
             RightVector = identity_XVector,
             UpVector = identity_YVector,
             LookVector = -identity_ZVector,
@@ -74,16 +76,17 @@ function CFrame.new(...): CFrame
     elseif (count == 12) then
         assert(checkNumbers(...), "Invalid type (12)");
         local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = ...;
+        local posVector = Vector3.DataType.new(x, y, z);
         local XVector = Vector3.DataType.new(r00, r10, r20);
         local YVector = Vector3.DataType.new(r01, r11, r21);
         local ZVector = Vector3.DataType.new(r02, r12, r22);
-        local hash = Helper.ValuesHash(x, y, z, XVector, YVector, ZVector);
+        local hash = Helper.ValuesHash(posVector, XVector, YVector, ZVector);
         local cached = CACHE[hash];
         if (cached) then
             return cached;
         end
         local self = setmetatable({
-            X = x, Y = y, Z = z,
+            Position = posVector,
             RightVector = XVector,
             UpVector = YVector,
             LookVector = -ZVector,
@@ -100,7 +103,7 @@ end
 export type CFrame = typeof(CFrame.new());
 
 CFrame.__tostring = function(self: CFrame): string
-    return `{self.X}, {self.Y}, {self.Z}, `
+    return `{self.Position.X}, {self.Position.Y}, {self.Position.Z}, `
         .. `{self.XVector.X}, {self.YVector.X}, {self.ZVector.X}, `
         .. `{self.XVector.Y}, {self.YVector.Y}, {self.ZVector.Y}, `
         .. `{self.XVector.Z}, {self.YVector.Z}, {self.ZVector.Z}`;
@@ -112,7 +115,7 @@ local function Serialize(value: CFrame): (
     number, number, number,
     number, number, number
 )
-    return value.X, value.Y, value.Z,
+    return value.Position.X, value.Position.Y, value.Position.Z,
         value.XVector.X, value.YVector.X, value.ZVector.X,
         value.XVector.Y, value.YVector.Y, value.ZVector.Y,
         value.XVector.Z, value.YVector.Z, value.ZVector.Z;
