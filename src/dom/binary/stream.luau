@@ -4,6 +4,7 @@ BufferStream.__index = BufferStream;
 
 function BufferStream.new(size: number)
     return setmetatable({
+        len = 0,
         buffer = buffer.create(size),
         position = 0,
         capacity = size,
@@ -11,10 +12,12 @@ function BufferStream.new(size: number)
 end
 
 function BufferStream.fromBuffer(buf: buffer)
+    local len = buffer.len(buf);
     return setmetatable({
+        len = len,
         buffer = buf,
         position = 0,
-        capacity = buffer.len(buf),
+        capacity = len,
     }, BufferStream);
 end
 
@@ -59,6 +62,7 @@ function BufferStream.expandToSizePrecise(self: BufferStream, new_size: number)
 end
 
 function BufferStream.expandToSize(self: BufferStream, new_size: number)
+    self.len = new_size;
     if (new_size <= self.capacity) then
         return;
     end
@@ -68,9 +72,9 @@ end
 
 function BufferStream.trim(self: BufferStream)
     local final = buffer.create(self.position);
-    buffer.copy(final, 0, self.buffer, 0, self.position);
+    buffer.copy(final, 0, self.buffer, 0, self.len);
 
-    self.capacity = self.position;
+    self.capacity = self.len;
     self.buffer = final;
 end
 

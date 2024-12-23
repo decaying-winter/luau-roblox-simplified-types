@@ -1,9 +1,9 @@
 --!strict
-local serde = zune.serde;
+local json = require("../polyfill/json");
 
 local dump = require("./generated");
 
-local api_dump: dump.ApiDump = serde.json.decode(dump.DumpJson);
+local api_dump: dump.ApiDump = json.decode(dump.DumpJson);
 
 local ReflectionDatabase = {};
 

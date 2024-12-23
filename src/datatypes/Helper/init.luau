@@ -1,5 +1,5 @@
 --!strict
-local crypto = zune.crypto;
+local md5 = require("../../polyfill/md5");
 
 local helper = {};
 
@@ -17,7 +17,7 @@ function helper.ValuesHash(...): string
     for _, value in values do
         table.insert(packed, tostring(value));
     end
-    return crypto.hash.md5(table.concat(packed, ","));
+    return md5(table.concat(packed, ","));
 end;
 
 return helper;

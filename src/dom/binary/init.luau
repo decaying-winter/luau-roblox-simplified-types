@@ -1,12 +1,15 @@
 --!strict
-local serde = zune.serde;
-local stdio = zune.stdio;
-local crypto = zune.crypto;
+local mem = require("../../polyfill/mem");
+local lz4 = require("../../polyfill/lz4");
+local zlib = require("../../polyfill/zlib");
+local zstd = require("../../polyfill/zstd");
+local base64 = require("../../polyfill/base64");
+local blake2 = require("../../polyfill/blake2");
+local stdio = require("../../polyfill/stdio");
 
 local Stream = require("./stream");
 
 local bit64 = require("../lib/bit64");
-local mem = require("../../polyfill/mem");
 
 local roblox = require("../roblox");
 local datatypes = require("../../datatypes");
@@ -264,7 +267,7 @@ local function writeChunk(
     local size = buffer.len(chunk_stream.buffer);
 
     local data = if (compressed) then
-        serde.lz4.compress(chunk_stream.buffer)
+        lz4.compress(chunk_stream.buffer)
     else
         chunk_stream.buffer;
 
@@ -840,14 +843,14 @@ local function readChunk(stream: BufferStream): ChunkInfo
         local byte = stream:readu8()
         stream:move(-1);
         if (byte == 0x58 or byte == 0x78) then
-            data = serde.zlib.decompress(stream:readbuffer(compressed_size));
+            data = zlib.decompress(stream:readbuffer(compressed_size));
         elseif (buffer.readstring(stream.buffer, stream.position + 1, 3) == "\xB5\x2F\xFD") then
-            data = serde.zstd.decompress(
+            data = zstd.decompress(
                 stream:readbuffer(compressed_size)
             );
             assert(buffer.len(data) == size, "[dom] Chunk zstd data size mismatch");
         else
-            data = serde.lz4.decompress(
+            data = lz4.decompress(
                 stream:readbuffer(compressed_size),
                 size
             );
@@ -1549,8 +1552,8 @@ local DeserializerMap = {
         for i = 1, hash_len do
             chunk_stream:move(16);
             local key = chunk_stream:readstring()
-            local hash = crypto.hash.blake2.b128(key);
-            local hash_base64 = serde.base64.encode(hash);
+            local hash = blake2.b128(key);
+            local hash_base64 = base64.encode(hash);
             local lookup = {
                 [hash_base64] = key,
             };
