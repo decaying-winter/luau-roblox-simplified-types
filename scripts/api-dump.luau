@@ -127,7 +127,7 @@ local function build(list: {string}): string
     return table.concat(list, '\n');
 end
 
-local version = net.request(VERSION_URL, {
+local version = net.http.request(VERSION_URL, {
     method = "GET",
     maxBodySize = 64; -- 64 bytes
 });
@@ -160,7 +160,7 @@ if (fs.isFile(`scripts/.cache/{hash}`)) then
     return;
 end
 
-local dump = net.request(URL, {
+local dump = net.http.request(URL, {
     method = "GET",
     maxBodySize = 8 * 1024 * 1024; -- 8MB
 });

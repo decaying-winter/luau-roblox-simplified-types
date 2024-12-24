@@ -38,6 +38,7 @@ for _, class in api_dump.Classes do
     API_CLASS_MEMBER_MAP[class.Name] = member_map;
 end
 
+ReflectionDatabase.Version = dump.Version;
 ReflectionDatabase.API_CLASS_MAP = API_CLASS_MAP;
 ReflectionDatabase.API_CLASS_MEMBER_MAP = API_CLASS_MEMBER_MAP;
 ReflectionDatabase.API_ENUM_MAP = API_ENUM_MAP;

@@ -335,6 +335,10 @@ export type Enum_AudioFilterType = Enum & {
     Bandpass: EnumItem,
     Notch: EnumItem,
 }
+export type Enum_AudioSimulationFidelity = Enum & {
+    None: EnumItem,
+    Automatic: EnumItem,
+}
 export type Enum_AudioSubType = Enum & {
     Music: EnumItem,
     SoundEffect: EnumItem,
@@ -520,11 +524,6 @@ export type Enum_ButtonStyle = Enum & {
     RobloxRoundButton: EnumItem,
     RobloxRoundDefaultButton: EnumItem,
     RobloxRoundDropdownButton: EnumItem,
-}
-export type Enum_CSGAsyncDynamicCollision = Enum & {
-    Default: EnumItem,
-    Disabled: EnumItem,
-    Enabled: EnumItem,
 }
 export type Enum_CageType = Enum & {
     Inner: EnumItem,
@@ -855,6 +854,12 @@ export type Enum_CoreGuiType = Enum & {
     SelfView: EnumItem,
     Captures: EnumItem,
 }
+export type Enum_CreateAssetResult = Enum & {
+    Success: EnumItem,
+    PermissionDenied: EnumItem,
+    UploadFailed: EnumItem,
+    Unknown: EnumItem,
+}
 export type Enum_CreateOutfitFailure = Enum & {
     InvalidName: EnumItem,
     OutfitLimitReached: EnumItem,
@@ -987,6 +992,13 @@ export type Enum_DeveloperMemoryTag = Enum & {
 }
 export type Enum_DeviceFeatureType = Enum & {
     DeviceCapture: EnumItem,
+}
+export type Enum_DeviceForm = Enum & {
+    Console: EnumItem,
+    Phone: EnumItem,
+    Tablet: EnumItem,
+    Desktop: EnumItem,
+    VR: EnumItem,
 }
 export type Enum_DeviceLevel = Enum & {
     Low: EnumItem,
@@ -1526,10 +1538,6 @@ export type Enum_InputType = Enum & {
     Constant: EnumItem,
     Sin: EnumItem,
 }
-export type Enum_Intent = Enum & {
-    Realistic: EnumItem,
-    Flat: EnumItem,
-}
 export type Enum_InterpolationThrottlingMode = Enum & {
     Default: EnumItem,
     Disabled: EnumItem,
@@ -1856,6 +1864,10 @@ export type Enum_LexemeType = Enum & {
     Star: EnumItem,
     DoubleStar: EnumItem,
     ReservedSpecial: EnumItem,
+}
+export type Enum_LightingStyle = Enum & {
+    Realistic: EnumItem,
+    Soft: EnumItem,
 }
 export type Enum_Limb = Enum & {
     Head: EnumItem,
@@ -2387,10 +2399,6 @@ export type Enum_ProximityPromptInputType = Enum & {
 export type Enum_ProximityPromptStyle = Enum & {
     Default: EnumItem,
     Custom: EnumItem,
-}
-export type Enum_Quality = Enum & {
-    Performance: EnumItem,
-    Quality: EnumItem,
 }
 export type Enum_QualityLevel = Enum & {
     Automatic: EnumItem,
@@ -3617,6 +3625,7 @@ export type Enums = {
     AssetTypeVerification: Enum_AssetTypeVerification,
     AudioApiRollout: Enum_AudioApiRollout,
     AudioFilterType: Enum_AudioFilterType,
+    AudioSimulationFidelity: Enum_AudioSimulationFidelity,
     AudioSubType: Enum_AudioSubType,
     AudioWindowSize: Enum_AudioWindowSize,
     AutoIndentRule: Enum_AutoIndentRule,
@@ -3640,7 +3649,6 @@ export type Enums = {
     BundleType: Enum_BundleType,
     Button: Enum_Button,
     ButtonStyle: Enum_ButtonStyle,
-    CSGAsyncDynamicCollision: Enum_CSGAsyncDynamicCollision,
     CageType: Enum_CageType,
     CameraMode: Enum_CameraMode,
     CameraPanMode: Enum_CameraPanMode,
@@ -3679,6 +3687,7 @@ export type Enums = {
     ContextActionResult: Enum_ContextActionResult,
     ControlMode: Enum_ControlMode,
     CoreGuiType: Enum_CoreGuiType,
+    CreateAssetResult: Enum_CreateAssetResult,
     CreateOutfitFailure: Enum_CreateOutfitFailure,
     CreatorType: Enum_CreatorType,
     CreatorTypeFilter: Enum_CreatorTypeFilter,
@@ -3697,6 +3706,7 @@ export type Enums = {
     DevTouchMovementMode: Enum_DevTouchMovementMode,
     DeveloperMemoryTag: Enum_DeveloperMemoryTag,
     DeviceFeatureType: Enum_DeviceFeatureType,
+    DeviceForm: Enum_DeviceForm,
     DeviceLevel: Enum_DeviceLevel,
     DeviceType: Enum_DeviceType,
     DialogBehaviorType: Enum_DialogBehaviorType,
@@ -3771,7 +3781,6 @@ export type Enums = {
     InfoType: Enum_InfoType,
     InitialDockState: Enum_InitialDockState,
     InputType: Enum_InputType,
-    Intent: Enum_Intent,
     InterpolationThrottlingMode: Enum_InterpolationThrottlingMode,
     InviteState: Enum_InviteState,
     ItemLineAlignment: Enum_ItemLineAlignment,
@@ -3783,6 +3792,7 @@ export type Enums = {
     Language: Enum_Language,
     LeftRight: Enum_LeftRight,
     LexemeType: Enum_LexemeType,
+    LightingStyle: Enum_LightingStyle,
     Limb: Enum_Limb,
     LineJoinMode: Enum_LineJoinMode,
     ListDisplayMode: Enum_ListDisplayMode,
@@ -3862,7 +3872,6 @@ export type Enums = {
     ProximityPromptExclusivity: Enum_ProximityPromptExclusivity,
     ProximityPromptInputType: Enum_ProximityPromptInputType,
     ProximityPromptStyle: Enum_ProximityPromptStyle,
-    Quality: Enum_Quality,
     QualityLevel: Enum_QualityLevel,
     R15CollisionType: Enum_R15CollisionType,
     RaycastFilterType: Enum_RaycastFilterType,
