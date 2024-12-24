@@ -15,6 +15,7 @@ end
 -- Based on https://github.com/kikito/md5.lua
 -- md5.lua 1.1.0
 -- MD5 computation in Lua (5.1-3, LuaJIT)
+-- modified by Sythivo
 --[[
     MIT LICENSE
 
@@ -46,184 +47,27 @@ local md5 = {}
 
 local char, byte, format, rep, sub =
     string.char, string.byte, string.format, string.rep, string.sub
-local bit_or, bit_and, bit_not, bit_xor, bit_rshift, bit_lshift
 
-local ok, bit = pcall(require, 'bit')
-local ok_ffi, ffi = pcall(require, 'ffi')
-if ok then
-    bit_or, bit_and, bit_not, bit_xor, bit_rshift, bit_lshift = bit.bor, bit.band, bit.bnot, bit.bxor, bit.rshift, bit.lshift
-else
-    ok, bit = pcall(require, 'bit32')
+local bit_not = bit32.bnot
 
-    if ok then
+local tobit = function(n)
+    return n <= 0x7fffffff and n or -(bit_not(n) + 1)
+end
 
-        bit_not = bit.bnot
-
-        local tobit = function(n)
-            return n <= 0x7fffffff and n or -(bit_not(n) + 1)
-        end
-
-        local normalize = function(f)
-            return function(a,b) return tobit(f(tobit(a), tobit(b))) end
-        end
-
-        bit_or, bit_and, bit_xor = normalize(bit.bor), normalize(bit.band), normalize(bit.bxor)
-        bit_rshift, bit_lshift = normalize(bit.rshift), normalize(bit.lshift)
-
-    else
-
-        local function tbl2number(tbl)
-            local result = 0
-            local power = 1
-            for i = 1, #tbl do
-                result = result + tbl[i] * power
-                power = power * 2
-            end
-            return result
-        end
-
-        local function expand(t1, t2)
-            local big, small = t1, t2
-            if(#big < #small) then
-                big, small = small, big
-            end
-            -- expand small
-            for i = #small + 1, #big do
-                small[i] = 0
-            end
-        end
-
-        local to_bits -- needs to be declared before bit_not
-
-        bit_not = function(n)
-            local tbl = to_bits(n)
-            local size = math.max(#tbl, 32)
-            for i = 1, size do
-                if(tbl[i] == 1) then
-                    tbl[i] = 0
-                else
-                    tbl[i] = 1
-                end
-            end
-            return tbl2number(tbl)
-        end
-
-        -- defined as local above
-        to_bits = function (n)
-            if(n < 0) then
-                -- negative
-                return to_bits(bit_not(math.abs(n)) + 1)
-            end
-            -- to bits table
-            local tbl = {}
-            local cnt = 1
-            local last
-            while n > 0 do
-                last      = n % 2
-                tbl[cnt]  = last
-                n         = (n-last)/2
-                cnt       = cnt + 1
-            end
-
-            return tbl
-        end
-
-        bit_or = function(m, n)
-            local tbl_m = to_bits(m)
-            local tbl_n = to_bits(n)
-            expand(tbl_m, tbl_n)
-
-            local tbl = {}
-            for i = 1, #tbl_m do
-                if(tbl_m[i]== 0 and tbl_n[i] == 0) then
-                    tbl[i] = 0
-                else
-                    tbl[i] = 1
-                end
-            end
-
-            return tbl2number(tbl)
-        end
-
-        bit_and = function(m, n)
-            local tbl_m = to_bits(m)
-            local tbl_n = to_bits(n)
-            expand(tbl_m, tbl_n)
-
-            local tbl = {}
-            for i = 1, #tbl_m do
-                if(tbl_m[i]== 0 or tbl_n[i] == 0) then
-                    tbl[i] = 0
-                else
-                    tbl[i] = 1
-                end
-            end
-
-            return tbl2number(tbl)
-        end
-
-        bit_xor = function(m, n)
-            local tbl_m = to_bits(m)
-            local tbl_n = to_bits(n)
-            expand(tbl_m, tbl_n)
-
-            local tbl = {}
-            for i = 1, #tbl_m do
-                if(tbl_m[i] ~= tbl_n[i]) then
-                    tbl[i] = 1
-                else
-                    tbl[i] = 0
-                end
-            end
-
-            return tbl2number(tbl)
-        end
-
-        bit_rshift = function(n, bits)
-            local high_bit = 0
-            if(n < 0) then
-                -- negative
-                n = bit_not(math.abs(n)) + 1
-                high_bit = 0x80000000
-            end
-
-            local floor = math.floor
-
-            for i=1, bits do
-                n = n/2
-                n = bit_or(floor(n), high_bit)
-            end
-            return floor(n)
-        end
-
-        bit_lshift = function(n, bits)
-            if(n < 0) then
-                -- negative
-                n = bit_not(math.abs(n)) + 1
-            end
-
-            for i=1, bits do
-                n = n*2
-            end
-            return bit_and(n, 0xFFFFFFFF)
-        end
+local normalize = function(f)
+    return function(a, b)
+        return tobit(f(tobit(a), tobit(b)))
     end
 end
+
+local bit_or, bit_and, bit_xor = normalize(bit32.bor), normalize(bit32.band), normalize(bit32.bxor)
+local bit_rshift, bit_lshift = normalize(bit32.rshift), normalize(bit32.lshift)
 
 -- convert little-endian 32-bit int to a 4-char string
-local lei2str
--- function is defined this way to allow full jit compilation (removing UCLO instruction in LuaJIT)
-if ok_ffi then
-    local ct_IntType = ffi.typeof("int[1]")
-    lei2str = function(i) return ffi.string(ct_IntType(i), 4) end
-else
-    lei2str = function (i)
-        local f=function (s) return char( bit_and( bit_rshift(i, s), 255)) end
-        return f(0)..f(8)..f(16)..f(24)
-    end
+local function lei2str(i)
+    local f=function (s) return char( bit_and( bit_rshift(i, s), 255)) end
+    return f(0)..f(8)..f(16)..f(24)
 end
-
-
 
 -- convert raw string to big-endian int
 local function str2bei(s)
@@ -235,25 +79,13 @@ local function str2bei(s)
 end
 
 -- convert raw string to little-endian int
-local str2lei
-
-if ok_ffi then
-    local ct_constcharptr = ffi.typeof("const char*")
-    local ct_constintptr = ffi.typeof("const int*")
-    str2lei = function(s)
-        local int = ct_constcharptr(s)
-        return ffi.cast(ct_constintptr, int)[0]
+local function str2lei(s)
+    local v=0
+    for i = #s,1,-1 do
+        v = v*256 + byte(s, i)
     end
-else
-    str2lei = function(s)
-        local v=0
-        for i = #s,1,-1 do
-            v = v*256 + byte(s, i)
-        end
-        return v
-        end
+    return v
 end
-
 
 -- cut up a string in little-endian ints of given size
 local function cut_le_str(s)
@@ -300,14 +132,14 @@ local CONSTS = {
     0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476
 }
 
-local f=function (x,y,z) return bit_or(bit_and(x,y),bit_and(-x-1,z)) end
-local g=function (x,y,z) return bit_or(bit_and(x,z),bit_and(y,-z-1)) end
-local h=function (x,y,z) return bit_xor(x,bit_xor(y,z)) end
-local i=function (x,y,z) return bit_xor(y,bit_or(x,-z-1)) end
-local z=function (ff,a,b,c,d,x,s,ac)
-    a=bit_and(a+ff(b,c,d)+x+ac,0xFFFFFFFF)
+local f = function (x, y, z) return bit_or(bit_and(x,y),bit_and(-x-1,z)) end
+local g = function (x, y, z) return bit_or(bit_and(x,z),bit_and(y,-z-1)) end
+local h = function (x, y, z) return bit_xor(x,bit_xor(y,z)) end
+local i = function (x, y, z) return bit_xor(y,bit_or(x,-z-1)) end
+local z = function (ff, a: number, b, c, d, x, s, ac)
+    a = bit_and(a + ff(b,c,d) + x + ac, 0xFFFFFFFF)
     -- be *very* careful that left shift does not cause rounding!
-    return bit_or(bit_lshift(bit_and(a,bit_rshift(0xFFFFFFFF,s)),s),bit_rshift(a,32-s))+b
+    return bit_or(bit_lshift(bit_and(a, bit_rshift(0xFFFFFFFF, s)), s), bit_rshift(a, 32-s)) + b
 end
 
 local function transform(A,B,C,D,X)
@@ -383,31 +215,46 @@ local function transform(A,B,C,D,X)
     b=z(i,b,c,d,a,X[ 9],21,t[64])
 
     return bit_and(A+a,0xFFFFFFFF),bit_and(B+b,0xFFFFFFFF),
-                 bit_and(C+c,0xFFFFFFFF),bit_and(D+d,0xFFFFFFFF)
+        bit_and(C+c,0xFFFFFFFF),bit_and(D+d,0xFFFFFFFF)
 end
 
 ----------------------------------------------------------------
 
-local function md5_update(self, s)
+type MD5 = {
+    a: number,
+    b: number,
+    c: number,
+    d: number,
+    pos: number,
+    buf: string,
+    update: (self: MD5, s: string) -> MD5,
+    finish: (self: MD5) -> string
+}
+
+local function md5_update(self: MD5, s: string): MD5
     self.pos = self.pos + #s
     s = self.buf .. s
     for ii = 1, #s - 63, 64 do
         local X = cut_le_str(sub(s,ii,ii+63))
         assert(#X == 16)
-        X[0] = table.remove(X,1) -- zero based!
+        X[0] = table.remove(X, 1)::number -- zero based!
         self.a,self.b,self.c,self.d = transform(self.a,self.b,self.c,self.d,X)
     end
     self.buf = sub(s, math.floor(#s/64)*64 + 1, #s)
     return self
 end
 
-local function md5_finish(self)
+local function md5_finish(self: MD5): string
     local msgLen = self.pos
     local padLen = 56 - msgLen % 64
 
-    if msgLen % 64 > 56 then padLen = padLen + 64 end
+    if msgLen % 64 > 56 then
+        padLen = padLen + 64
+    end
 
-    if padLen == 0 then padLen = 64 end
+    if padLen == 0 then
+        padLen = 64
+    end
 
     local s = char(128) .. rep(char(0),padLen-1) .. lei2str(bit_and(8*msgLen, 0xFFFFFFFF)) .. lei2str(math.floor(msgLen/0x20000000))
     md5_update(self, s)
@@ -418,24 +265,22 @@ end
 
 ----------------------------------------------------------------
 
-function md5.new()
-    return { a = CONSTS[65], b = CONSTS[66], c = CONSTS[67], d = CONSTS[68],
-                     pos = 0,
-                     buf = '',
-                     update = md5_update,
-                     finish = md5_finish }
+function md5.new(): MD5
+    return {
+        a = CONSTS[65], b = CONSTS[66], c = CONSTS[67], d = CONSTS[68],
+        pos = 0,
+        buf = '',
+        update = md5_update,
+        finish = md5_finish
+    }
 end
 
 function md5.tohex(s)
     return format("%08x%08x%08x%08x", str2bei(sub(s, 1, 4)), str2bei(sub(s, 5, 8)), str2bei(sub(s, 9, 12)), str2bei(sub(s, 13, 16)))
 end
 
-function md5.sum(s)
-    return md5.new():update(s):finish()
+return function(s: string)
+    return md5.tohex(
+        md5.new():update(s):finish()
+    );
 end
-
-function md5.sumhexa(s)
-    return md5.tohex(md5.sum(s))
-end
-
-return md5.sumhexa;
