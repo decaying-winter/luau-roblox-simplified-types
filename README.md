@@ -51,3 +51,8 @@ local content = dom.serialize(doc, "BINARY");
 
 Warnings:
 - 64-bit integer data could not be represented fully due to luau's number limitations, the max precision is 2^53.
+
+Goals:
+- High performance
+- Support most Runtimes with Luau(0.650+)
+- Up to date Roblox instances
