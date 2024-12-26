@@ -6,6 +6,10 @@ local reflection = require("../reflection");
 
 local presets = require("./presets");
 
+local Signal = require("./signal");
+
+type Signal = Signal.Signal;
+
 local object = {};
 
 local function isObject(value: any): boolean
@@ -36,6 +40,7 @@ local function blankFromClass(className: string): object
             isService = is_service,
         }::dom.DOMInstance,
         ["@children"] = {},
+        ["@events"] = {}::{[string]: Signal},
         ["@parent"] = nil::object?,
         ["@destroyed"] = false,
         ["@internal_map"] = PROXY_MAP,
@@ -65,25 +70,28 @@ local TYPE_MAP = {
 };
 
 local DEFAULT_TYPE_MAP = {
-    ["BinaryString"] = function()
+    ["BinaryString"] = function(className: string, superclass: string, property: string)
         return "";
     end,
-    ["int64"] = function()
+    ["int64"] = function(className: string, superclass: string, property: string)
         return buffer.create(8);
     end,
-    ["bool"] = function()
+    ["bool"] = function(className: string, superclass: string, property: string)
         return false;
     end,
-    ["string"] = function()
+    ["string"] = function(className: string, superclass: string, property: string)
+        if (property == "Name") then
+            return className;
+        end
         return "";
     end,
-    ["float"] = function()
+    ["float"] = function(className: string, superclass: string, property: string)
         return 0;
     end,
-    ["double"] = function()
+    ["double"] = function(className: string, superclass: string, property: string)
         return 0;
     end,
-    ["int"] = function()
+    ["int"] = function(className: string, superclass: string, property: string)
         return 0;
     end,
 };
@@ -160,7 +168,10 @@ local function loadDefaultProperties(self: object, className: string)
             end);
             continue;
         end
-        if (properties[member.Name]) then
+        if (
+            properties[member.Name]
+            or (member.Name == "ClassName" and member.ValueType.Name == "string" and member.ValueType.Category == "Primitive")
+        ) then
             continue;
         end
 
@@ -197,7 +208,7 @@ local function loadDefaultProperties(self: object, className: string)
         elseif (member.ValueType.Category == "Primitive") then
             serializeId = dom.roblox.PropertyTypes[TYPE_MAP[member.ValueType.Name]];
             if (DEFAULT_TYPE_MAP[member.ValueType.Name]) then
-                default = DEFAULT_TYPE_MAP[member.ValueType.Name]();
+                default = DEFAULT_TYPE_MAP[member.ValueType.Name](instance.className, className, member.Name);
             end
         elseif (member.ValueType.Category == "DataType") then
             local datatype = datatypes[member.ValueType.Name];
@@ -252,6 +263,19 @@ function object.LoadDefaultProperties(self: object, className: string)
     loadDefaultProperties(self, className);
 end
 
+function object.create(className: string): roblox.Instance
+    local class = reflection:GetClass(className);
+    if (not class) then
+        error("Class not found");
+    end
+
+    local object = object.raw(className);
+
+    loadDefaultProperties(object, className);
+
+    return object::any;
+end
+
 function object.new(className: string, parent: roblox.Instance?): roblox.Instance
     local class = reflection:GetClass(className);
     if (not class) then
@@ -272,6 +296,8 @@ function object.new(className: string, parent: roblox.Instance?): roblox.Instanc
     return object::any;
 end
 
+object.presets = presets;
+
 local function resolveGetProperty(self: object, className: string, key: string)
     local class = reflection:GetClass(className);
     if (not class) then
@@ -290,6 +316,9 @@ local function resolveGetProperty(self: object, className: string, key: string)
                 preset.method[key]
             else
                 nil;
+    end
+    if (handler and method) then
+        error(`[object] Property and Method duplicate name conflict '{key}' in '{className}'`);
     end
     if (not handler and not method) then
         if (class.Superclass == "<<<ROOT>>>") then
@@ -350,7 +379,8 @@ local function checkRecursion(self: object, parent: object?): boolean
 end
 
 function object.__tostring(self: object)
-    return `<instance {tostring(if (self["@instance"].properties["Name"]) then self["@instance"].properties["Name"].value else self["@class"])}>`;
+    local name = self["@instance"].properties["Name"];
+    return `<instance {tostring(if (name) then name.value else self["@instance"].className)}>`;
 end
 
 function object.__index(self: object, key: string)
@@ -378,6 +408,11 @@ function object.__newindex(self: object, key: string, value: any)
         if (checkRecursion(self, value)) then
             error("Parent cannot be a child of itself");
         end
+        local descendant_added_signals = {};
+        local descendant_removing_signals = {};
+        local ancestry_changed_signal = self["@events"]["AncestryChanged"]::Signal?;
+        local old_parent_event_signal;
+        local new_parent_event_signal;
         if (parent) then
             local children_idx = table.find(parent["@children"], self);
             if (children_idx) then
@@ -385,11 +420,45 @@ function object.__newindex(self: object, key: string, value: any)
             else
                 error("Child not found in parent (Internal Error)");
             end
+            old_parent_event_signal = parent["@events"]["ChildRemoved"]::Signal?;
+            while parent do
+                local signal = parent["@events"]["DescendantRemoving"]::Signal?;
+                if (signal) then
+                    table.insert(descendant_removing_signals, signal);
+                end
+                parent = parent.Parent;
+            end
         end
         if (value) then
             table.insert(value["@children"], self);
+            new_parent_event_signal = value["@events"]["ChildAdded"]::Signal?;
+            local new_parent = value;
+            while new_parent do
+                local signal = new_parent["@events"]["DescendantAdded"]::Signal?;
+                if (signal) then
+                    table.insert(descendant_added_signals, signal);
+                end
+                new_parent = new_parent.Parent;
+            end
         end
         rawset(self::any, "@parent", value);
+
+        if (ancestry_changed_signal) then
+            ancestry_changed_signal:Fire(self, parent);
+        end
+        if (old_parent_event_signal) then
+            old_parent_event_signal:Fire(self);
+        end
+        if (new_parent_event_signal) then
+            new_parent_event_signal:Fire(self);
+        end
+        for _, signal in descendant_removing_signals do
+            signal:Fire(self);
+        end
+        for _, signal in descendant_added_signals do
+            signal:Fire(self);
+        end
+        return;
     end
     resolveSetProperty(self, self["@instance"].className, key);
 end
