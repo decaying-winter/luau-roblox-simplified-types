@@ -1,1 +1,1 @@
-return zune.datetime;
+return require("../polyfill/datetime");

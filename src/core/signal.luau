@@ -1,5 +1,5 @@
 --!strict
-local task = zune.task;
+local task = require("../polyfill/task");
 
 type Connection = {
     ["@next"]: Connection?,

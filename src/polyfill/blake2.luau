@@ -7,8 +7,9 @@ if (type(_VERSION) == "string") then
     end
 end
 
+local md5 = require("./md5");
+
+-- TODO: replace md5 with blake2 b128
 return {
-    b128 = function(...)
-        error("Not implemented")
-    end::any,
+    b128 = md5,
 }::any;
