@@ -198,8 +198,12 @@ local instance = {};
 local function instanceNew(className: string, parent: roblox.Instance?): roblox.Instance
     return object.new(className, parent);
 end
+local function instanceCreate(className: string): roblox.Instance
+    return object.create(className);
+end
 
-instance.New = (instanceNew::any)::roblox.NewConstructor;
+instance.new = (instanceNew::any)::roblox.NewConstructor;
+instance.create = (instanceCreate::any)::(className: string) -> roblox.Instance;
 
 manager.Instance = instance;
 
@@ -215,6 +219,58 @@ manager.type = function(value: any)
         return "userdata";
     end
     return type(value);
+end;
+
+manager.implementProperty = function(
+    className: string,
+    propertyName: string,
+    get_callback: (instance: roblox.Instance) -> any,
+    set_callback: (instance: roblox.Instance, value: any) -> ()
+)
+    assert(type(className) == "string", "className must be a string");
+    assert(type(propertyName) == "string", "propertyName must be a string");
+    assert(type(get_callback) == "function", "get_callback must be a function");
+    assert(type(set_callback) == "function", "set_callback must be a function");
+    local existing = object.presets[className];
+    if (not existing) then
+        local impl = {};
+        impl.method = {};
+        impl.property = {
+            get = {};
+            set = {};
+        };
+        existing = impl;
+        object.presets[className] = existing;
+    end
+    if (not existing.property) then
+        existing.property = {
+            get = {};
+            set = {};
+        };
+    end
+    existing.property.get[propertyName] = get_callback;
+    existing.property.set[propertyName] = set_callback;
+end;
+
+manager.implementMethod = function(
+    className: string,
+    methodName: string,
+    callback: (instance: roblox.Instance, ...any) -> any
+)
+    assert(type(className) == "string", "className must be a string");
+    assert(type(methodName) == "string", "methodName must be a string");
+    assert(type(callback) == "function", "get_callback must be a function");
+    local existing = object.presets[className];
+    if (not existing) then
+        local impl = {};
+        impl.method = {};
+        existing = impl;
+        object.presets[className] = existing;
+    end
+    if (not existing.method) then
+        existing.method = {};
+    end
+    existing.method[methodName] = callback;
 end;
 
 return manager;

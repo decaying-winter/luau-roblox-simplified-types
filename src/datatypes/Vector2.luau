@@ -55,6 +55,10 @@ end
 
 export type Vector2 = typeof(Vector2.new(0, 0));
 
+Vector2.__tostring = function(self: Vector2): string
+    return `{self._internal.X}, {self._internal.Y}`;
+end
+
 Vector2.__index = function(self: Vector2, index: string): any
     if (type(index) == "string") then
         if (index == "x" or index == "X") then

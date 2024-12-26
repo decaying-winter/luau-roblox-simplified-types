@@ -5,7 +5,7 @@ if (type(_VERSION) == "string") then
     if (string.sub(_VERSION, 1, 4) == "Zune") then
         return zune.crypto.hash.md5;
     elseif (string.sub(_VERSION, 1, 4) == "Lune") then
-        local serde = require("@lune/serde");
+        local serde = require("@lune/serde")::any;
         return function(value: string)
             return serde.hash("md5", value);
         end
